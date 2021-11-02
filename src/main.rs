@@ -9,7 +9,6 @@ use sdl2::keyboard::Keycode;
 use sdl2::video::GLProfile;
 use std::ffi::CString;
 use std::ops::Deref;
-use std::ptr;
 
 pub struct Gl {
   inner: std::rc::Rc<gl::Gl>,
@@ -76,7 +75,7 @@ fn compile_shader(gl: &gl::Gl, src: &str, kind: GLenum) -> Result<GLuint, String
   unsafe {
     let shader = gl.CreateShader(kind);
     let c_str_src = CString::new(src.as_bytes()).unwrap();
-    gl.ShaderSource(shader, 1, &c_str_src.as_ptr(), ptr::null());
+    gl.ShaderSource(shader, 1, &c_str_src.as_ptr(), std::ptr::null());
     gl.CompileShader(shader);
     let mut success = gl::TRUE as GLint;
     gl.GetShaderiv(shader, gl::COMPILE_STATUS, &mut success);
@@ -85,7 +84,7 @@ fn compile_shader(gl: &gl::Gl, src: &str, kind: GLenum) -> Result<GLuint, String
       let mut len = 0;
       gl.GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len);
       let error = create_error_buffer(len as usize);
-      gl.GetShaderInfoLog(shader, len, ptr::null_mut(), error.as_ptr() as *mut GLchar);
+      gl.GetShaderInfoLog(shader, len, std::ptr::null_mut(), error.as_ptr() as *mut GLchar);
       return Err(error.to_string_lossy().into_owned());
     }
     Ok(shader)
@@ -109,7 +108,7 @@ fn link_program(
       let mut len = 0;
       gl.GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len);
       let error = create_error_buffer(len as usize);
-      gl.GetProgramInfoLog(program, len, ptr::null_mut(), error.as_ptr() as *mut GLchar);
+      gl.GetProgramInfoLog(program, len, std::ptr::null_mut(), error.as_ptr() as *mut GLchar);
       return Err(error.to_string_lossy().into_owned());
     }
 
@@ -217,7 +216,7 @@ fn main() -> Result<(), String> {
       gl.UseProgram(program);
       gl.BindVertexArray(vao);
 
-      gl.DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, 0 as *const _);
+      gl.DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, std::ptr::null());
     }
 
     window.gl_swap_window();
