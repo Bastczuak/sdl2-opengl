@@ -60,8 +60,10 @@ const FRAGMENT_SHADER: &str = r#"
 
 out vec4 Color;
 
+uniform vec3 uColor;
+
 void main() {
-  Color = vec4(1.0f, 0.5f, 0.2f, 1.0f);
+  Color = vec4(uColor, 1.0f);
 }
 "#;
 
@@ -184,7 +186,6 @@ fn main() -> Result<(), String> {
     );
     gl.BindBuffer(gl::ARRAY_BUFFER, 0);
     gl.BindVertexArray(0);
-    gl.PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
   }
 
   unsafe {
@@ -193,6 +194,7 @@ fn main() -> Result<(), String> {
   }
 
   let mut event_pump = sdl_context.event_pump().unwrap();
+  let timer = sdl_context.timer().unwrap();
 
   'running: loop {
     for event in event_pump.poll_iter() {
@@ -214,8 +216,11 @@ fn main() -> Result<(), String> {
     unsafe {
       gl.Clear(gl::COLOR_BUFFER_BIT);
       gl.UseProgram(program);
+      let seconds = timer.ticks() as f32 / 1000.0;
+      let green_color = f32::sin(seconds) / 2.0 + 0.5;
+      let vertex_color_location = gl.GetUniformLocation(program, CString::new("uColor").unwrap().into_raw());
+      gl.Uniform3f(vertex_color_location, 0.0, green_color, 0.0);
       gl.BindVertexArray(vao);
-
       gl.DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, std::ptr::null());
     }
 
