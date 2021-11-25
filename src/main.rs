@@ -35,15 +35,70 @@ impl Deref for Gl {
 }
 
 #[rustfmt::skip]
-const TRIANGLE_VERTICIES: [f32; 20] = [
-  // positions     //texture coords
-  0.5, 0.5, 0.0, 1.0, 1.0,  // top right
-  0.5, -0.5, 0.0, 1.0, 0.0,  // bottom right
-  -0.5, -0.5, 0.0, 0.0, 0.0,  // top left
-  -0.5, 0.5, 0.0, 0.0, 1.0,  // bottom left
+const TRIANGLE_VERTICIES: [f32; 120] = [
+  // positions      //texture coords
+  -0.5, -0.5, -0.5, 0.0, 0.0,
+  0.5, -0.5, -0.5, 1.0, 0.0,
+  0.5, 0.5, -0.5, 1.0, 1.0,
+  -0.5, 0.5, -0.5, 0.0, 1.0,
+  //
+  -0.5, -0.5, 0.5, 0.0, 0.0,
+  0.5, -0.5, 0.5, 1.0, 0.0,
+  0.5, 0.5, 0.5, 1.0, 1.0,
+  -0.5, 0.5, 0.5, 0.0, 1.0,
+  //
+  -0.5, 0.5, 0.5, 1.0, 0.0,
+  -0.5, 0.5, -0.5, 1.0, 1.0,
+  -0.5, -0.5, -0.5, 0.0, 1.0,
+  -0.5, -0.5, 0.5, 0.0, 0.0,
+  //
+  0.5, 0.5, 0.5, 1.0, 0.0,
+  0.5, 0.5, -0.5, 1.0, 1.0,
+  0.5, -0.5, -0.5, 0.0, 1.0,
+  0.5, -0.5, 0.5, 0.0, 0.0,
+  //
+  -0.5, -0.5, -0.5, 0.0, 1.0,
+  0.5, -0.5, -0.5, 1.0, 1.0,
+  0.5, -0.5, 0.5, 1.0, 0.0,
+  -0.5, -0.5, 0.5, 0.0, 0.0,
+  //
+  -0.5, 0.5, -0.5, 0.0, 1.0,
+  0.5, 0.5, -0.5, 1.0, 1.0,
+  0.5, 0.5, 0.5, 1.0, 0.0,
+  -0.5, 0.5, 0.5, 0.0, 0.0,
 ];
 
-const TRIANGLE_INDICIES: [u32; 6] = [0, 1, 3, 1, 2, 3];
+const TRIANGLE_INDICIES: [u32; 36] = [
+  0, 1, 3,
+  1, 2, 3,
+  //
+  4, 5, 7,
+  5, 6, 7,
+  //
+  8, 9, 11,
+  9, 10, 11,
+  //
+  12, 13, 15,
+  13, 14, 15,
+  //
+  16, 17, 19,
+  17, 18, 19,
+  //
+  20, 21, 23,
+  21, 22, 23,
+];
+const CUBE_POSITIONS: [(f32, f32, f32); 10] = [
+  (0.0, 0.0, 0.0),
+  (2.0, 5.0, -15.0),
+  (-1.5, -2.2, -2.5),
+  (-3.8, -2.0, -12.3),
+  (2.4, -0.4, -3.5),
+  (-1.7, 3.0, -7.5),
+  (1.3, -2.0, -2.5),
+  (1.5, 2.0, -2.5),
+  (1.5, 0.2, -1.5),
+  (-1.3, 1.0, -1.5)
+];
 
 const VERTEX_SHADER: &str = r#"
 #version 330 core
@@ -51,12 +106,14 @@ const VERTEX_SHADER: &str = r#"
 layout (location = 0) in vec3 Position;
 layout (location = 1) in vec2 TexCoords;
 
+uniform mat4 uMVP;
+
 out VERTEX_SHADER_OUTPUT {
   vec2 TexCoords;
 } OUT;
 
 void main() {
-  gl_Position = vec4(Position, 1.0);
+  gl_Position = uMVP * vec4(Position, 1.0);
   OUT.TexCoords = TexCoords;
 }
 "#;
@@ -175,6 +232,8 @@ fn main() -> Result<(), String> {
   let mut textures = [0; 2];
 
   unsafe {
+    gl.Enable(gl::DEPTH_TEST);
+
     gl.GenBuffers(1, &mut vbo);
     gl.GenBuffers(1, &mut ebo);
     gl.GenTextures(2, textures.as_mut_ptr());
@@ -269,8 +328,14 @@ fn main() -> Result<(), String> {
     gl.GenerateMipmap(gl::TEXTURE_2D);
 
     gl.UseProgram(program);
-    gl.Uniform1i(gl.GetUniformLocation(program, CString::new("uTexture0").unwrap().into_raw()), 0);
-    gl.Uniform1i(gl.GetUniformLocation(program, CString::new("uTexture1").unwrap().into_raw()), 1);
+    gl.Uniform1i(
+      gl.GetUniformLocation(program, CString::new("uTexture0").unwrap().into_raw()),
+      0,
+    );
+    gl.Uniform1i(
+      gl.GetUniformLocation(program, CString::new("uTexture1").unwrap().into_raw()),
+      1,
+    );
 
     gl.Viewport(0, 0, 800, 600);
     gl.ClearColor(0.2, 0.3, 0.3, 1.0);
@@ -290,12 +355,14 @@ fn main() -> Result<(), String> {
         } => {
           break 'running;
         }
-        Event::KeyDown { keycode: Some(Keycode::Down), ..} => {
-          mix_value = (mix_value - 0.01).max(0.0)
-        },
-        Event::KeyDown { keycode: Some(Keycode::Up), ..} => {
-          mix_value = (mix_value + 0.01).min(1.0)
-        }
+        Event::KeyDown {
+          keycode: Some(Keycode::Down),
+          ..
+        } => mix_value = (mix_value - 0.01).max(0.0),
+        Event::KeyDown {
+          keycode: Some(Keycode::Up),
+          ..
+        } => mix_value = (mix_value + 0.01).min(1.0),
         Event::Window {
           win_event: WindowEvent::Resized(w, h),
           ..
@@ -307,8 +374,16 @@ fn main() -> Result<(), String> {
     }
 
     unsafe {
-      gl.Clear(gl::COLOR_BUFFER_BIT);
+      gl.Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+      gl.ActiveTexture(gl::TEXTURE0);
+      gl.BindTexture(gl::TEXTURE_2D, textures[0]);
+      gl.ActiveTexture(gl::TEXTURE1);
+      gl.BindTexture(gl::TEXTURE_2D, textures[1]);
+      gl.UseProgram(program);
+      gl.BindVertexArray(vao);
+
       let seconds = timer.ticks() as f32 / 1000.0;
+
       let green_color = f32::sin(seconds) / 2.0 + 0.5;
       gl.Uniform3f(
         gl.GetUniformLocation(program, CString::new("uColor").unwrap().into_raw()),
@@ -316,15 +391,30 @@ fn main() -> Result<(), String> {
         green_color,
         0.0,
       );
-      gl.Uniform1f(gl.GetUniformLocation(program, CString::new("uMixValue").unwrap().into_raw()), mix_value);
-      gl.ActiveTexture(gl::TEXTURE0);
-      gl.BindTexture(gl::TEXTURE_2D, textures[0]);
-      gl.ActiveTexture(gl::TEXTURE1);
-      gl.BindTexture(gl::TEXTURE_2D, textures[1]);
+      gl.Uniform1f(
+        gl.GetUniformLocation(program, CString::new("uMixValue").unwrap().into_raw()),
+        mix_value,
+      );
 
-      gl.UseProgram(program);
-      gl.BindVertexArray(vao);
-      gl.DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, std::ptr::null());
+      for (i, pos) in CUBE_POSITIONS.iter().enumerate() {
+        let mvp_mat = {
+          let model = glam::Mat4::from_rotation_translation(glam::Quat::from_axis_angle(
+            glam::Vec3::new(0.5, 1.0, 0.0).normalize(),
+            i as f32 * seconds * 20.0f32.to_radians(),
+          ), glam::Vec3::from(*pos));
+          let view = glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -3.0));
+          let projection = glam::Mat4::perspective_rh_gl(45.0f32.to_radians(), 800.0 / 600.0, 0.1, 100.0);
+          projection * view * model
+        };
+        gl.UniformMatrix4fv(
+          gl.GetUniformLocation(program, CString::new("uMVP").unwrap().into_raw()),
+          1,
+          gl::FALSE,
+          mvp_mat.to_cols_array().as_ptr(),
+        );
+
+        gl.DrawElements(gl::TRIANGLES, TRIANGLE_INDICIES.len() as i32, gl::UNSIGNED_INT, std::ptr::null());
+      }
     }
 
     window.gl_swap_window();

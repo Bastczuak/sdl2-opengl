@@ -156,6 +156,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glam"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2c626156a479bfb5a4362c43f5abadd700af33ebc8db068089d9cb92493d6ab"
+
+[[package]]
 name = "hermit-abi"
 version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -352,6 +358,7 @@ name = "sdl-opengl"
 version = "0.1.0"
 dependencies = [
  "gl_generator",
+ "glam",
  "image",
  "sdl2",
 ]
