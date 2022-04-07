@@ -69,23 +69,12 @@ const TRIANGLE_VERTICIES: [f32; 120] = [
 ];
 
 const TRIANGLE_INDICIES: [u32; 36] = [
-  0, 1, 3,
-  1, 2, 3,
-  //
-  4, 5, 7,
-  5, 6, 7,
-  //
-  8, 9, 11,
-  9, 10, 11,
-  //
-  12, 13, 15,
-  13, 14, 15,
-  //
-  16, 17, 19,
-  17, 18, 19,
-  //
-  20, 21, 23,
-  21, 22, 23,
+  0, 1, 3, 1, 2, 3, //
+  4, 5, 7, 5, 6, 7, //
+  8, 9, 11, 9, 10, 11, //
+  12, 13, 15, 13, 14, 15, //
+  16, 17, 19, 17, 18, 19, //
+  20, 21, 23, 21, 22, 23,
 ];
 const CUBE_POSITIONS: [(f32, f32, f32); 10] = [
   (0.0, 0.0, 0.0),
@@ -97,7 +86,7 @@ const CUBE_POSITIONS: [(f32, f32, f32); 10] = [
   (1.3, -2.0, -2.5),
   (1.5, 2.0, -2.5),
   (1.5, 0.2, -1.5),
-  (-1.3, 1.0, -1.5)
+  (-1.3, 1.0, -1.5),
 ];
 
 const VERTEX_SHADER: &str = r#"
@@ -344,8 +333,18 @@ fn main() -> Result<(), String> {
   let mut event_pump = sdl_context.event_pump().unwrap();
   let timer = sdl_context.timer().unwrap();
   let mut mix_value = 0.0f32;
+  let mut camera_pos = glam::Vec3::new(0.0, 0.0, 3.0);
+  let camera_front = glam::Vec3::new(0.0, 0.0, -1.0);
+  let camera_up = glam::Vec3::new(0.0, 1.0, 0.0);
+  let camera_speed = 2.5;
+  let mut last = 0.0;
 
   'running: loop {
+    let seconds = timer.ticks() as f32 / 1000.0;
+    let delta = seconds - last;
+    println!("{}", delta);
+    last = seconds;
+
     for event in event_pump.poll_iter() {
       match event {
         Event::Quit { .. }
@@ -355,6 +354,10 @@ fn main() -> Result<(), String> {
         } => {
           break 'running;
         }
+        Event::KeyDown {keycode: Some(Keycode::W), ..} => camera_pos += camera_front * camera_speed * delta,
+        Event::KeyDown {keycode: Some(Keycode::S), ..} => camera_pos -= camera_front * camera_speed * delta,
+        Event::KeyDown {keycode: Some(Keycode::A), ..} => camera_pos -= camera_front.cross(camera_up).normalize() * camera_speed * delta,
+        Event::KeyDown {keycode: Some(Keycode::D), ..} => camera_pos += camera_front.cross(camera_up).normalize() * camera_speed * delta,
         Event::KeyDown {
           keycode: Some(Keycode::Down),
           ..
@@ -382,7 +385,6 @@ fn main() -> Result<(), String> {
       gl.UseProgram(program);
       gl.BindVertexArray(vao);
 
-      let seconds = timer.ticks() as f32 / 1000.0;
 
       let green_color = f32::sin(seconds) / 2.0 + 0.5;
       gl.Uniform3f(
@@ -398,12 +400,21 @@ fn main() -> Result<(), String> {
 
       for (i, pos) in CUBE_POSITIONS.iter().enumerate() {
         let mvp_mat = {
-          let model = glam::Mat4::from_rotation_translation(glam::Quat::from_axis_angle(
-            glam::Vec3::new(0.5, 1.0, 0.0).normalize(),
-            i as f32 * seconds * 20.0f32.to_radians(),
-          ), glam::Vec3::from(*pos));
-          let view = glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -3.0));
-          let projection = glam::Mat4::perspective_rh_gl(45.0f32.to_radians(), 800.0 / 600.0, 0.1, 100.0);
+          let model = glam::Mat4::from_rotation_translation(
+            glam::Quat::from_axis_angle(
+              glam::Vec3::new(0.5, 1.0, 0.0).normalize(),
+              i as f32 * seconds * 20.0f32.to_radians(),
+            ),
+            glam::Vec3::from(*pos),
+          );
+          let view =
+            glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
+          let projection = glam::Mat4::perspective_rh_gl(
+            90.0f32.to_radians(),
+            800.0 / 600.0,
+            0.1,
+            100.0,
+          );
           projection * view * model
         };
         gl.UniformMatrix4fv(
@@ -413,7 +424,12 @@ fn main() -> Result<(), String> {
           mvp_mat.to_cols_array().as_ptr(),
         );
 
-        gl.DrawElements(gl::TRIANGLES, TRIANGLE_INDICIES.len() as i32, gl::UNSIGNED_INT, std::ptr::null());
+        gl.DrawElements(
+          gl::TRIANGLES,
+          TRIANGLE_INDICIES.len() as i32,
+          gl::UNSIGNED_INT,
+          std::ptr::null(),
+        );
       }
     }
 
