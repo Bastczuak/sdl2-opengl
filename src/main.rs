@@ -337,6 +337,7 @@ fn main() -> Result<(), String> {
   let camera_front = glam::Vec3::new(0.0, 0.0, -1.0);
   let camera_up = glam::Vec3::new(0.0, 1.0, 0.0);
   let camera_speed = 2.5;
+  let mut camera_zoom = 1.0;
   let mut last = 0.0;
 
   'running: loop {
@@ -354,10 +355,30 @@ fn main() -> Result<(), String> {
         } => {
           break 'running;
         }
-        Event::KeyDown {keycode: Some(Keycode::W), ..} => camera_pos += camera_front * camera_speed * delta,
-        Event::KeyDown {keycode: Some(Keycode::S), ..} => camera_pos -= camera_front * camera_speed * delta,
-        Event::KeyDown {keycode: Some(Keycode::A), ..} => camera_pos -= camera_front.cross(camera_up).normalize() * camera_speed * delta,
-        Event::KeyDown {keycode: Some(Keycode::D), ..} => camera_pos += camera_front.cross(camera_up).normalize() * camera_speed * delta,
+        Event::KeyDown {
+          keycode: Some(Keycode::Q),
+          ..
+        } => camera_zoom += camera_speed * delta,
+        Event::KeyDown {
+          keycode: Some(Keycode::E),
+          ..
+        } => camera_zoom -= camera_speed * delta,
+        Event::KeyDown {
+          keycode: Some(Keycode::W),
+          ..
+        } => camera_pos += camera_up * camera_speed * delta,
+        Event::KeyDown {
+          keycode: Some(Keycode::S),
+          ..
+        } => camera_pos -= camera_up * camera_speed * delta,
+        Event::KeyDown {
+          keycode: Some(Keycode::A),
+          ..
+        } => camera_pos -= camera_front.cross(camera_up).normalize() * camera_speed * delta,
+        Event::KeyDown {
+          keycode: Some(Keycode::D),
+          ..
+        } => camera_pos += camera_front.cross(camera_up).normalize() * camera_speed * delta,
         Event::KeyDown {
           keycode: Some(Keycode::Down),
           ..
@@ -385,7 +406,6 @@ fn main() -> Result<(), String> {
       gl.UseProgram(program);
       gl.BindVertexArray(vao);
 
-
       let green_color = f32::sin(seconds) / 2.0 + 0.5;
       gl.Uniform3f(
         gl.GetUniformLocation(program, CString::new("uColor").unwrap().into_raw()),
@@ -409,9 +429,12 @@ fn main() -> Result<(), String> {
           );
           let view =
             glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
-          let projection = glam::Mat4::perspective_rh_gl(
-            90.0f32.to_radians(),
-            800.0 / 600.0,
+          let aspect = 800.0 / 600.0;
+          let projection = glam::Mat4::orthographic_rh_gl(
+            -aspect * camera_zoom,
+            aspect * camera_zoom,
+            -camera_zoom,
+            camera_zoom,
             0.1,
             100.0,
           );
