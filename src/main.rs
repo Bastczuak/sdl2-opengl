@@ -124,37 +124,37 @@ void main() {
 "#;
 
 const FBO_VERTEX_SHADER: &str = r#"
-    #version 330 core
+#version 330 core
 
-    layout (location = 0) in vec2 Position;
-    layout (location = 1) in vec2 TexCoords;
+layout (location = 0) in vec2 Position;
+layout (location = 1) in vec2 TexCoords;
 
-    out VERTEX_SHADER_OUTPUT {
-      vec2 TexCoords;
-    } OUT;
+out VERTEX_SHADER_OUTPUT {
+  vec2 TexCoords;
+} OUT;
 
-    void main() {
-      OUT.TexCoords = TexCoords;
-      gl_Position = vec4(Position, 0.0, 1.0);
-    }
-  "#;
+void main() {
+  OUT.TexCoords = TexCoords;
+  gl_Position = vec4(Position, 0.0, 1.0);
+}
+"#;
 
 const FBO_FRAGMENT_SHADER: &str = r#"
-    #version 330 core
+#version 330 core
 
-    in VERTEX_SHADER_OUTPUT {
-      vec2 TexCoords;
-    } IN;
+in VERTEX_SHADER_OUTPUT {
+  vec2 TexCoords;
+} IN;
 
-    out vec4 Color;
+out vec4 Color;
 
-    uniform sampler2D uTexture;
+uniform sampler2D uTexture;
 
-    void main() {
-      vec3 col = texture(uTexture, IN.TexCoords).rgb;
-      Color = vec4(col, 1.0);
-    }
-  "#;
+void main() {
+  vec3 col = texture(uTexture, IN.TexCoords).rgb;
+  Color = vec4(col, 1.0);
+}
+"#;
 
 
 unsafe fn create_error_buffer(length: usize) -> CString {
