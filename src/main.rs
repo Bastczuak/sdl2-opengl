@@ -35,7 +35,7 @@ impl Deref for Gl {
 }
 
 #[rustfmt::skip]
-const TRIANGLE_VERTICIES: [f32; 120] = [
+const CUBE_VERTICES: [f32; 120] = [
   // positions      //texture coords
   -0.5, -0.5, -0.5, 0.0, 0.0,
   0.5, -0.5, -0.5, 1.0, 0.0,
@@ -68,7 +68,7 @@ const TRIANGLE_VERTICIES: [f32; 120] = [
   -0.5, 0.5, 0.5, 0.0, 0.0,
 ];
 
-const TRIANGLE_INDICIES: [u32; 36] = [
+const CUBE_INDICES: [u32; 36] = [
   0, 1, 3, 1, 2, 3, //
   4, 5, 7, 5, 6, 7, //
   8, 9, 11, 9, 10, 11, //
@@ -88,6 +88,7 @@ const CUBE_POSITIONS: [(f32, f32, f32); 10] = [
   (1.5, 0.2, -1.5),
   (-1.3, 1.0, -1.5),
 ];
+
 
 const VERTEX_SHADER: &str = r#"
 #version 330 core
@@ -115,15 +116,46 @@ in VERTEX_SHADER_OUTPUT {
 
 out vec4 Color;
 
-uniform vec3 uColor;
-uniform sampler2D uTexture0;
-uniform sampler2D uTexture1;
-uniform float uMixValue;
+uniform sampler2D uTexture;
 
 void main() {
-  Color = mix(texture(uTexture0, IN.TexCoords), texture(uTexture1, IN.TexCoords * vec2(1.0, -1.0)), uMixValue) * vec4(uColor, 1.0);
+  Color = texture(uTexture, IN.TexCoords);
 }
 "#;
+
+const FBO_VERTEX_SHADER: &str = r#"
+    #version 330 core
+
+    layout (location = 0) in vec2 Position;
+    layout (location = 1) in vec2 TexCoords;
+
+    out VERTEX_SHADER_OUTPUT {
+      vec2 TexCoords;
+    } OUT;
+
+    void main() {
+      OUT.TexCoords = TexCoords;
+      gl_Position = vec4(Position, 0.0, 1.0);
+    }
+  "#;
+
+const FBO_FRAGMENT_SHADER: &str = r#"
+    #version 330 core
+
+    in VERTEX_SHADER_OUTPUT {
+      vec2 TexCoords;
+    } IN;
+
+    out vec4 Color;
+
+    uniform sampler2D uTexture;
+
+    void main() {
+      vec3 col = texture(uTexture, IN.TexCoords).rgb;
+      Color = vec4(col, 1.0);
+    }
+  "#;
+
 
 unsafe fn create_error_buffer(length: usize) -> CString {
   let mut buffer = Vec::with_capacity(length + 1);
@@ -156,6 +188,37 @@ fn compile_shader(gl: &gl::Gl, src: &str, kind: GLenum) -> Result<GLuint, String
   }
 }
 
+unsafe fn load_texture(gl: &gl::Gl, path: &str) -> Result<GLuint, String> {
+  let mut texture = 0;
+  gl.GenTextures(1, &mut texture);
+
+  let image = image::open(path).map_err(|e| e.to_string())?;
+  let (width, height) = image.dimensions();
+  let format = if image.color().channel_count() == 3 { gl::RGB } else { gl::RGBA };
+  gl.BindTexture(gl::TEXTURE_2D, texture);
+  gl.TexImage2D(
+    gl::TEXTURE_2D,
+    0,
+    format as i32,
+    width as i32,
+    height as i32,
+    0,
+    format,
+    gl::UNSIGNED_BYTE,
+    image.as_bytes().as_ptr() as *const GLvoid,
+  );
+  gl.GenerateMipmap(gl::TEXTURE_2D);
+
+  gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
+  gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
+  gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR_MIPMAP_LINEAR as i32);
+  gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+
+  gl.BindTexture(gl::TEXTURE_2D, 0);
+
+  Ok(texture)
+}
+
 fn link_program(
   gl: &gl::Gl,
   vertex_shader: GLuint,
@@ -182,14 +245,23 @@ fn link_program(
       return Err(error.to_string_lossy().into_owned());
     }
 
-    gl.DetachShader(program, vertex_shader);
-    gl.DetachShader(program, fragment_shader);
+    gl.DeleteShader(vertex_shader);
+    gl.DeleteShader(fragment_shader);
 
     Ok(program)
   }
 }
 
 fn main() -> Result<(), String> {
+  let quad_vertices = [
+    -1.0, 1.0, 0.0, 1.0,
+    -1.0, -1.0, 0.0, 0.0,
+    1.0, -1.0, 1.0, 0.0,
+    -1.0, 1.0, 0.0, 1.0,
+    1.0, -1.0, 1.0, 0.0,
+    1.0, 1.0, 1.0, 1.0,
+  ];
+
   let sdl_context = sdl2::init().unwrap();
   let video_subsystem = sdl_context.video().unwrap();
 
@@ -211,38 +283,39 @@ fn main() -> Result<(), String> {
   debug_assert_eq!(gl_attr.context_profile(), GLProfile::Core);
   debug_assert_eq!(gl_attr.context_version(), (3, 3));
 
-  let vertex_shader = compile_shader(&gl, VERTEX_SHADER, gl::VERTEX_SHADER)?;
-  let fragment_shader = compile_shader(&gl, FRAGMENT_SHADER, gl::FRAGMENT_SHADER)?;
-  let program = link_program(&gl, vertex_shader, fragment_shader)?;
+  let cube_program = {
+    let vertex_shader = compile_shader(&gl, VERTEX_SHADER, gl::VERTEX_SHADER)?;
+    let fragment_shader = compile_shader(&gl, FRAGMENT_SHADER, gl::FRAGMENT_SHADER)?;
+    link_program(&gl, vertex_shader, fragment_shader)?
+  };
+  let screen_programm = {
+    let vertex_shader = compile_shader(&gl, FBO_VERTEX_SHADER, gl::VERTEX_SHADER)?;
+    let fragment_shader = compile_shader(&gl, FBO_FRAGMENT_SHADER, gl::FRAGMENT_SHADER)?;
+    link_program(&gl, vertex_shader, fragment_shader)?
+  };
 
-  let mut vbo = 0; // Vertex Buffer Object
-  let mut vao = 0; // Vertex Array Object
-  let mut ebo = 0; // Element Array Object
-  let mut textures = [0; 2];
-
-  unsafe {
-    gl.Enable(gl::DEPTH_TEST);
-
+  let (cube_vao, cube_vbo, cube_ebo) = unsafe {
+    let (mut vao, mut vbo, mut ebo) = (0, 0, 0);
+    gl.GenVertexArrays(1, &mut vao);
     gl.GenBuffers(1, &mut vbo);
     gl.GenBuffers(1, &mut ebo);
-    gl.GenTextures(2, textures.as_mut_ptr());
-    gl.GenVertexArrays(1, &mut vao);
     gl.BindVertexArray(vao);
     gl.BindBuffer(gl::ARRAY_BUFFER, vbo);
     gl.BufferData(
       gl::ARRAY_BUFFER,
-      (TRIANGLE_VERTICIES.len() * std::mem::size_of::<f32>()) as GLsizeiptr,
-      TRIANGLE_VERTICIES.as_ptr() as *const GLvoid,
+      (CUBE_VERTICES.len() * std::mem::size_of::<f32>()) as GLsizeiptr,
+      CUBE_VERTICES.as_ptr() as *const GLvoid,
       gl::STATIC_DRAW,
     );
     gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
     gl.BufferData(
       gl::ELEMENT_ARRAY_BUFFER,
-      (TRIANGLE_INDICIES.len() * std::mem::size_of::<u32>()) as GLsizeiptr,
-      TRIANGLE_INDICIES.as_ptr() as *const GLvoid,
+      (CUBE_INDICES.len() * std::mem::size_of::<u32>()) as GLsizeiptr,
+      CUBE_INDICES.as_ptr() as *const GLvoid,
       gl::STATIC_DRAW,
     );
-    let pos_attr = gl.GetAttribLocation(program, CString::new("Position").unwrap().into_raw());
+
+    let pos_attr = gl.GetAttribLocation(cube_program, CString::new("Position").unwrap().into_raw());
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
@@ -252,8 +325,9 @@ fn main() -> Result<(), String> {
       (5 * std::mem::size_of::<f32>()) as i32, // offset of each point
       std::ptr::null(),
     );
+
     let texture_coords_attr =
-      gl.GetAttribLocation(program, CString::new("TexCoords").unwrap().into_raw());
+      gl.GetAttribLocation(cube_program, CString::new("TexCoords").unwrap().into_raw());
     gl.EnableVertexAttribArray(texture_coords_attr as u32);
     gl.VertexAttribPointer(
       texture_coords_attr as u32,
@@ -263,76 +337,103 @@ fn main() -> Result<(), String> {
       (5 * std::mem::size_of::<f32>()) as i32, // offset of each point
       (3 * std::mem::size_of::<f32>()) as *const GLvoid, // offset of each point
     );
-    gl.BindBuffer(gl::ARRAY_BUFFER, 0);
-    gl.BindVertexArray(0);
 
-    // load a new texture
-    gl.BindTexture(gl::TEXTURE_2D, textures[0]);
-    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
-    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
-    gl.TexParameteri(
-      gl::TEXTURE_2D,
-      gl::TEXTURE_MIN_FILTER,
-      gl::LINEAR_MIPMAP_LINEAR as i32,
+    (vao, vbo, ebo)
+  };
+
+  let (screen_vao, screen_vbo) = unsafe {
+    let (mut vao, mut vbo) = (0, 0);
+    gl.GenVertexArrays(1, &mut vao);
+    gl.GenBuffers(1, &mut vbo);
+    gl.BindVertexArray(vao);
+    gl.BindBuffer(gl::ARRAY_BUFFER, vbo);
+    gl.BufferData(
+      gl::ARRAY_BUFFER,
+      (quad_vertices.len() * std::mem::size_of::<f32>()) as GLsizeiptr,
+      quad_vertices.as_ptr() as *const GLvoid,
+      gl::STATIC_DRAW,
     );
-    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
-    let img_container = image::open("container.jpeg").unwrap();
-    let (width, height) = img_container.dimensions();
+
+    let pos_attr = gl.GetAttribLocation(screen_programm, CString::new("Position").unwrap().into_raw());
+    gl.EnableVertexAttribArray(pos_attr as u32);
+    gl.VertexAttribPointer(
+      pos_attr as u32,
+      2,
+      gl::FLOAT,
+      gl::FALSE,
+      (4 * std::mem::size_of::<f32>()) as i32, // offset of each point
+      std::ptr::null(),
+    );
+
+    let texture_coords_attr =
+      gl.GetAttribLocation(screen_programm, CString::new("TexCoords").unwrap().into_raw());
+    gl.EnableVertexAttribArray(texture_coords_attr as u32);
+    gl.VertexAttribPointer(
+      texture_coords_attr as u32,
+      2,
+      gl::FLOAT,
+      gl::FALSE,
+      (4 * std::mem::size_of::<f32>()) as i32, // offset of each point
+      (2 * std::mem::size_of::<f32>()) as *const GLvoid, // offset of each point
+    );
+
+    (vao, vbo)
+  };
+
+  let cube_texture = unsafe {
+    let cube_texture = load_texture(&gl, "container.jpeg")?;
+    gl.UseProgram(cube_program);
+    gl.Uniform1i(
+      gl.GetUniformLocation(cube_program, CString::new("uTexture").unwrap().into_raw()),
+      0,
+    );
+    cube_texture
+  };
+
+  let (frame_buffer, texture_color_buffer) = unsafe {
+    gl.UseProgram(screen_programm);
+    gl.Uniform1i(
+      gl.GetUniformLocation(screen_programm, CString::new("uTexture").unwrap().into_raw()),
+      0,
+    );
+
+    let mut frame_buffer = 0;
+    gl.GenFramebuffers(1, &mut frame_buffer);
+    gl.BindFramebuffer(gl::FRAMEBUFFER, frame_buffer);
+
+    let mut texture_color_buffer = 0;
+    gl.GenTextures(1, &mut texture_color_buffer);
+    gl.BindTexture(gl::TEXTURE_2D, texture_color_buffer);
     gl.TexImage2D(
       gl::TEXTURE_2D,
       0,
       gl::RGB as i32,
-      width as i32,
-      height as i32,
+      800,
+      600,
       0,
       gl::RGB,
       gl::UNSIGNED_BYTE,
-      img_container.as_bytes().as_ptr() as *const GLvoid,
+      std::ptr::null(),
     );
-    gl.GenerateMipmap(gl::TEXTURE_2D);
-
-    // load a new texture
-    gl.BindTexture(gl::TEXTURE_2D, textures[1]);
-    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
-    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
-    gl.TexParameteri(
-      gl::TEXTURE_2D,
-      gl::TEXTURE_MIN_FILTER,
-      gl::LINEAR_MIPMAP_LINEAR as i32,
-    );
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
     gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
-    let img_face = image::open("awesomeface.png").unwrap();
-    let (width, height) = img_face.dimensions();
-    gl.TexImage2D(
-      gl::TEXTURE_2D,
-      0,
-      gl::RGBA as i32,
-      width as i32,
-      height as i32,
-      0,
-      gl::RGBA,
-      gl::UNSIGNED_BYTE,
-      img_face.as_bytes().as_ptr() as *const GLvoid,
-    );
-    gl.GenerateMipmap(gl::TEXTURE_2D);
+    gl.FramebufferTexture2D(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, texture_color_buffer, 0);
 
-    gl.UseProgram(program);
-    gl.Uniform1i(
-      gl.GetUniformLocation(program, CString::new("uTexture0").unwrap().into_raw()),
-      0,
-    );
-    gl.Uniform1i(
-      gl.GetUniformLocation(program, CString::new("uTexture1").unwrap().into_raw()),
-      1,
-    );
+    let mut rbo = 0;
+    gl.GenRenderbuffers(1, &mut rbo);
+    gl.BindRenderbuffer(gl::RENDERBUFFER, rbo);
+    gl.RenderbufferStorage(gl::RENDERBUFFER, gl::DEPTH24_STENCIL8, 800, 600);
+    gl.FramebufferRenderbuffer(gl::FRAMEBUFFER, gl::DEPTH_STENCIL_ATTACHMENT, gl::RENDERBUFFER, rbo);
+    if gl.CheckFramebufferStatus(gl::FRAMEBUFFER) != gl::FRAMEBUFFER_COMPLETE {
+      println!("ERROR::FRAMEBUFFER:: Framebuffer is not complete!");
+    }
+    gl.BindFramebuffer(gl::FRAMEBUFFER, 0);
 
-    gl.Viewport(0, 0, 800, 600);
-    gl.ClearColor(0.2, 0.3, 0.3, 1.0);
-  }
+    (frame_buffer, texture_color_buffer)
+  };
 
   let mut event_pump = sdl_context.event_pump().unwrap();
   let timer = sdl_context.timer().unwrap();
-  let mut mix_value = 0.0f32;
   let mut camera_pos = glam::Vec3::new(0.0, 0.0, 3.0);
   let camera_front = glam::Vec3::new(0.0, 0.0, -1.0);
   let camera_up = glam::Vec3::new(0.0, 1.0, 0.0);
@@ -340,10 +441,13 @@ fn main() -> Result<(), String> {
   let mut camera_zoom = 1.0;
   let mut last = 0.0;
 
+  // unsafe {
+  //   gl.PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
+  // }
+
   'running: loop {
     let seconds = timer.ticks() as f32 / 1000.0;
     let delta = seconds - last;
-    println!("{}", delta);
     last = seconds;
 
     for event in event_pump.poll_iter() {
@@ -379,14 +483,6 @@ fn main() -> Result<(), String> {
           keycode: Some(Keycode::D),
           ..
         } => camera_pos += camera_front.cross(camera_up).normalize() * camera_speed * delta,
-        Event::KeyDown {
-          keycode: Some(Keycode::Down),
-          ..
-        } => mix_value = (mix_value - 0.01).max(0.0),
-        Event::KeyDown {
-          keycode: Some(Keycode::Up),
-          ..
-        } => mix_value = (mix_value + 0.01).min(1.0),
         Event::Window {
           win_event: WindowEvent::Resized(w, h),
           ..
@@ -398,25 +494,15 @@ fn main() -> Result<(), String> {
     }
 
     unsafe {
+      gl.BindFramebuffer(gl::FRAMEBUFFER, frame_buffer);
+      gl.Enable(gl::DEPTH_TEST);
+      gl.ClearColor(0.1, 0.1, 0.1, 1.0);
       gl.Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-      gl.ActiveTexture(gl::TEXTURE0);
-      gl.BindTexture(gl::TEXTURE_2D, textures[0]);
-      gl.ActiveTexture(gl::TEXTURE1);
-      gl.BindTexture(gl::TEXTURE_2D, textures[1]);
-      gl.UseProgram(program);
-      gl.BindVertexArray(vao);
 
-      let green_color = f32::sin(seconds) / 2.0 + 0.5;
-      gl.Uniform3f(
-        gl.GetUniformLocation(program, CString::new("uColor").unwrap().into_raw()),
-        0.0,
-        green_color,
-        0.0,
-      );
-      gl.Uniform1f(
-        gl.GetUniformLocation(program, CString::new("uMixValue").unwrap().into_raw()),
-        mix_value,
-      );
+      gl.UseProgram(cube_program);
+      gl.BindVertexArray(cube_vao);
+      gl.ActiveTexture(gl::TEXTURE0);
+      gl.BindTexture(gl::TEXTURE_2D, cube_texture);
 
       for (i, pos) in CUBE_POSITIONS.iter().enumerate() {
         let mvp_mat = {
@@ -441,7 +527,7 @@ fn main() -> Result<(), String> {
           projection * view * model
         };
         gl.UniformMatrix4fv(
-          gl.GetUniformLocation(program, CString::new("uMVP").unwrap().into_raw()),
+          gl.GetUniformLocation(cube_program, CString::new("uMVP").unwrap().into_raw()),
           1,
           gl::FALSE,
           mvp_mat.to_cols_array().as_ptr(),
@@ -449,26 +535,36 @@ fn main() -> Result<(), String> {
 
         gl.DrawElements(
           gl::TRIANGLES,
-          TRIANGLE_INDICIES.len() as i32,
+          CUBE_INDICES.len() as i32,
           gl::UNSIGNED_INT,
           std::ptr::null(),
         );
       }
+
+      gl.BindVertexArray(0);
+      gl.BindFramebuffer(gl::FRAMEBUFFER, 0);
+      gl.Disable(gl::DEPTH_TEST);
+      gl.ClearColor(1.0, 1.0, 1.0, 1.0);
+      gl.Clear(gl::COLOR_BUFFER_BIT);
+      gl.UseProgram(screen_programm);
+      gl.BindVertexArray(screen_vao);
+      gl.BindTexture(gl::TEXTURE_2D, texture_color_buffer);
+      gl.DrawArrays(gl::TRIANGLES, 0, 6);
     }
 
     window.gl_swap_window();
 
-    ::std::thread::sleep(::std::time::Duration::new(0, 1_000_000_000u32 / 60));
+    std::thread::sleep(std::time::Duration::new(0, 1_000_000_000u32 / 60));
   }
 
   unsafe {
-    gl.DeleteVertexArrays(1, &vao);
-    gl.DeleteBuffers(1, &vbo);
-    gl.DeleteBuffers(1, &ebo);
-    gl.DeleteBuffers(2, textures.as_ptr());
-    gl.DeleteProgram(program);
-    gl.DeleteShader(vertex_shader);
-    gl.DeleteShader(fragment_shader);
+    gl.DeleteVertexArrays(1, &cube_vao);
+    gl.DeleteVertexArrays(1, &screen_vao);
+    gl.DeleteBuffers(1, &cube_vbo);
+    gl.DeleteBuffers(1, &cube_ebo);
+    gl.DeleteBuffers(1, &cube_texture);
+    gl.DeleteBuffers(1, &screen_vbo);
+    gl.DeleteProgram(cube_program);
   }
 
   Ok(())
