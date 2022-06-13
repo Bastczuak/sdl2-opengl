@@ -1,0 +1,3 @@
+-fbo aber anstelle mit 2d
+-funktionen finden um polygone zu zeichnen
+-try to use glBlitFramebuffer for downscaling

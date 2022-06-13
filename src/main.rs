@@ -151,8 +151,7 @@ out vec4 Color;
 uniform sampler2D uTexture;
 
 void main() {
-  vec3 col = texture(uTexture, IN.TexCoords).rgb;
-  Color = vec4(col, 1.0);
+  Color = texture(uTexture, IN.TexCoords);
 }
 "#;
 
@@ -254,7 +253,7 @@ fn link_program(
 
 fn main() -> Result<(), String> {
   let quad_vertices = [
-    -1.0, 1.0, 0.0, 1.0,
+    -1.0f32, 1.0, 0.0, 1.0,
     -1.0, -1.0, 0.0, 0.0,
     1.0, -1.0, 1.0, 0.0,
     -1.0, 1.0, 0.0, 1.0,
@@ -408,21 +407,21 @@ fn main() -> Result<(), String> {
       gl::TEXTURE_2D,
       0,
       gl::RGB as i32,
-      800,
-      600,
+      320,
+      200,
       0,
       gl::RGB,
       gl::UNSIGNED_BYTE,
       std::ptr::null(),
     );
-    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
     gl.FramebufferTexture2D(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, texture_color_buffer, 0);
 
     let mut rbo = 0;
     gl.GenRenderbuffers(1, &mut rbo);
     gl.BindRenderbuffer(gl::RENDERBUFFER, rbo);
-    gl.RenderbufferStorage(gl::RENDERBUFFER, gl::DEPTH24_STENCIL8, 800, 600);
+    gl.RenderbufferStorage(gl::RENDERBUFFER, gl::DEPTH24_STENCIL8, 320, 200);
     gl.FramebufferRenderbuffer(gl::FRAMEBUFFER, gl::DEPTH_STENCIL_ATTACHMENT, gl::RENDERBUFFER, rbo);
     if gl.CheckFramebufferStatus(gl::FRAMEBUFFER) != gl::FRAMEBUFFER_COMPLETE {
       println!("ERROR::FRAMEBUFFER:: Framebuffer is not complete!");
@@ -440,10 +439,7 @@ fn main() -> Result<(), String> {
   let camera_speed = 2.5;
   let mut camera_zoom = 1.0;
   let mut last = 0.0;
-
-  // unsafe {
-  //   gl.PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
-  // }
+  let (mut viewport_w, mut viewport_h) = (800, 600);
 
   'running: loop {
     let seconds = timer.ticks() as f32 / 1000.0;
@@ -486,8 +482,9 @@ fn main() -> Result<(), String> {
         Event::Window {
           win_event: WindowEvent::Resized(w, h),
           ..
-        } => unsafe {
-          gl.Viewport(0, 0, w, h);
+        } =>  {
+          viewport_w = w;
+          viewport_h = h;
         },
         _ => {}
       }
@@ -495,6 +492,7 @@ fn main() -> Result<(), String> {
 
     unsafe {
       gl.BindFramebuffer(gl::FRAMEBUFFER, frame_buffer);
+      gl.Viewport(0, 0, 320, 200);
       gl.Enable(gl::DEPTH_TEST);
       gl.ClearColor(0.1, 0.1, 0.1, 1.0);
       gl.Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
@@ -515,7 +513,7 @@ fn main() -> Result<(), String> {
           );
           let view =
             glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
-          let aspect = 800.0 / 600.0;
+          let aspect = 300.0 / 200.0;
           let projection = glam::Mat4::orthographic_rh_gl(
             -aspect * camera_zoom,
             aspect * camera_zoom,
@@ -541,13 +539,12 @@ fn main() -> Result<(), String> {
         );
       }
 
-      gl.BindVertexArray(0);
       gl.BindFramebuffer(gl::FRAMEBUFFER, 0);
+      gl.Viewport(0, 0, viewport_w, viewport_h);
       gl.Disable(gl::DEPTH_TEST);
-      gl.ClearColor(1.0, 1.0, 1.0, 1.0);
-      gl.Clear(gl::COLOR_BUFFER_BIT);
       gl.UseProgram(screen_programm);
       gl.BindVertexArray(screen_vao);
+      gl.ActiveTexture(gl::TEXTURE0);
       gl.BindTexture(gl::TEXTURE_2D, texture_color_buffer);
       gl.DrawArrays(gl::TRIANGLES, 0, 6);
     }
@@ -565,6 +562,8 @@ fn main() -> Result<(), String> {
     gl.DeleteBuffers(1, &cube_texture);
     gl.DeleteBuffers(1, &screen_vbo);
     gl.DeleteProgram(cube_program);
+    gl.DeleteProgram(screen_programm);
+    gl.DeleteFramebuffers(1, &frame_buffer);
   }
 
   Ok(())
