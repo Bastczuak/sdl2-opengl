@@ -34,48 +34,19 @@ impl Deref for Gl {
   }
 }
 
-#[rustfmt::skip]
-const CUBE_VERTICES: [f32; 120] = [
-  // positions      //texture coords
-  -0.5, -0.5, -0.5, 0.0, 0.0,
-  0.5, -0.5, -0.5, 1.0, 0.0,
-  0.5, 0.5, -0.5, 1.0, 1.0,
-  -0.5, 0.5, -0.5, 0.0, 1.0,
-  //
-  -0.5, -0.5, 0.5, 0.0, 0.0,
-  0.5, -0.5, 0.5, 1.0, 0.0,
-  0.5, 0.5, 0.5, 1.0, 1.0,
-  -0.5, 0.5, 0.5, 0.0, 1.0,
-  //
-  -0.5, 0.5, 0.5, 1.0, 0.0,
-  -0.5, 0.5, -0.5, 1.0, 1.0,
-  -0.5, -0.5, -0.5, 0.0, 1.0,
-  -0.5, -0.5, 0.5, 0.0, 0.0,
-  //
-  0.5, 0.5, 0.5, 1.0, 0.0,
-  0.5, 0.5, -0.5, 1.0, 1.0,
-  0.5, -0.5, -0.5, 0.0, 1.0,
-  0.5, -0.5, 0.5, 0.0, 0.0,
-  //
-  -0.5, -0.5, -0.5, 0.0, 1.0,
-  0.5, -0.5, -0.5, 1.0, 1.0,
-  0.5, -0.5, 0.5, 1.0, 0.0,
-  -0.5, -0.5, 0.5, 0.0, 0.0,
-  //
-  -0.5, 0.5, -0.5, 0.0, 1.0,
-  0.5, 0.5, -0.5, 1.0, 1.0,
-  0.5, 0.5, 0.5, 1.0, 0.0,
-  -0.5, 0.5, 0.5, 0.0, 0.0,
+const CUBE_VERTICES: [f32; 16] = [
+  // positions //texture coords
+  0.5, 0.5, 1.0, 1.0,
+  0.5, -0.5, 1.0, 0.0,
+  -0.5, -0.5, 0.0, 0.0,
+  -0.5, 0.5, 0.0, 1.0,
 ];
 
-const CUBE_INDICES: [u32; 36] = [
-  0, 1, 3, 1, 2, 3, //
-  4, 5, 7, 5, 6, 7, //
-  8, 9, 11, 9, 10, 11, //
-  12, 13, 15, 13, 14, 15, //
-  16, 17, 19, 17, 18, 19, //
-  20, 21, 23, 21, 22, 23,
+const CUBE_INDICES: [u32; 6] = [
+  0, 1, 3,
+  1, 2, 3,
 ];
+
 const CUBE_POSITIONS: [(f32, f32, f32); 10] = [
   (0.0, 0.0, 0.0),
   (2.0, 5.0, -15.0),
@@ -93,7 +64,7 @@ const CUBE_POSITIONS: [(f32, f32, f32); 10] = [
 const VERTEX_SHADER: &str = r#"
 #version 330 core
 
-layout (location = 0) in vec3 Position;
+layout (location = 0) in vec2 Position;
 layout (location = 1) in vec2 TexCoords;
 
 uniform mat4 uMVP;
@@ -103,7 +74,7 @@ out VERTEX_SHADER_OUTPUT {
 } OUT;
 
 void main() {
-  gl_Position = uMVP * vec4(Position, 1.0);
+  gl_Position = uMVP * vec4(Position, 0.0, 1.0);
   OUT.TexCoords = TexCoords;
 }
 "#;
@@ -321,7 +292,7 @@ fn main() -> Result<(), String> {
       3,
       gl::FLOAT,
       gl::FALSE,
-      (5 * std::mem::size_of::<f32>()) as i32, // offset of each point
+      (4 * std::mem::size_of::<f32>()) as i32, // offset of each point
       std::ptr::null(),
     );
 
@@ -333,8 +304,8 @@ fn main() -> Result<(), String> {
       2,
       gl::FLOAT,
       gl::FALSE,
-      (5 * std::mem::size_of::<f32>()) as i32, // offset of each point
-      (3 * std::mem::size_of::<f32>()) as *const GLvoid, // offset of each point
+      (4 * std::mem::size_of::<f32>()) as i32, // offset of each point
+      (2 * std::mem::size_of::<f32>()) as *const GLvoid, // offset of each point
     );
 
     (vao, vbo, ebo)
@@ -482,10 +453,10 @@ fn main() -> Result<(), String> {
         Event::Window {
           win_event: WindowEvent::Resized(w, h),
           ..
-        } =>  {
+        } => {
           viewport_w = w;
           viewport_h = h;
-        },
+        }
         _ => {}
       }
     }
