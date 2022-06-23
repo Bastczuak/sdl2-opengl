@@ -316,6 +316,11 @@ fn main() -> Result<(), String> {
       &rect(0.0, 0.0, 1.0, 1.0),
       Winding::Positive,
     );
+
+    builder.add_rectangle(
+      &rect(-0.5, -0.5, 2.0, 2.0),
+      Winding::Positive,
+    );
     builder.build().unwrap();
 
     let (mut vao, mut vbo, mut ebo) = (0, 0, 0);
@@ -626,47 +631,9 @@ fn main() -> Result<(), String> {
       gl.UseProgram(lyon_program);
       gl.BindVertexArray(lyon_vao);
       let mvp_mat = {
-        let model = glam::Mat4::from_translation(
+        let mut model = glam::Mat4::from_rotation_z(seconds * 20.0f32.to_radians());
+        model *= glam::Mat4::from_translation(
           glam::Vec3::new(-0.5, -0.5, 1.0),
-        );
-        let view =
-          glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
-        let aspect = 300.0 / 200.0;
-        let projection = glam::Mat4::orthographic_rh_gl(
-          -aspect * camera_zoom,
-          aspect * camera_zoom,
-          -camera_zoom,
-          camera_zoom,
-          0.1,
-          100.0,
-        );
-        projection * view * model
-      };
-
-      gl.UniformMatrix4fv(
-        gl.GetUniformLocation(lyon_program, CString::new("uMVP").unwrap().into_raw()),
-        1,
-        gl::FALSE,
-        mvp_mat.to_cols_array().as_ptr(),
-      );
-
-      gl.DrawElements(
-        gl::TRIANGLES,
-        lyon_indices.len() as i32,
-        gl::UNSIGNED_SHORT,
-        std::ptr::null(),
-      );
-      //
-
-      //
-      gl.UseProgram(lyon_program);
-      gl.BindVertexArray(lyon_vao);
-      let mvp_mat = {
-        let model = glam::Mat4::from_translation(
-          glam::Vec3::new(-0.5, -0.5, 1.0),
-        );
-        let model = model * glam::Mat4::from_scale(
-          glam::Vec3::new(2.0, 2.0, 1.0),
         );
         let view =
           glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
