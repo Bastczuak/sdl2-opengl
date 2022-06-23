@@ -42,7 +42,7 @@ const CUBE_VERTICES: [f32; 16] = [
   -0.5, 0.5, 0.0, 1.0,
 ];
 
-const CUBE_INDICES: [u32; 6] = [
+const CUBE_INDICES: [u16; 6] = [
   0, 1, 3,
   1, 2, 3,
 ];
@@ -59,7 +59,6 @@ const CUBE_POSITIONS: [(f32, f32, f32); 10] = [
   (1.5, 0.2, -1.5),
   (-1.3, 1.0, -1.5),
 ];
-
 
 const VERTEX_SHADER: &str = r#"
 #version 330 core
@@ -94,6 +93,28 @@ void main() {
 }
 "#;
 
+
+const LYON_VERTEX_SHADER: &str = r#"
+#version 330 core
+
+layout (location = 0) in vec2 Position;
+
+uniform mat4 uMVP;
+
+void main() {
+  gl_Position = uMVP * vec4(Position, 0.0, 1.0);
+}
+"#;
+const LYON_FRAGMENT_SHADER: &str = r#"
+#version 330 core
+
+out vec4 Color;
+
+void main() {
+  Color = vec4(0.5, 0.0, 0.0, 1.0);
+}
+"#;
+
 const FBO_VERTEX_SHADER: &str = r#"
 #version 330 core
 
@@ -125,7 +146,6 @@ void main() {
   Color = texture(uTexture, IN.TexCoords);
 }
 "#;
-
 
 unsafe fn create_error_buffer(length: usize) -> CString {
   let mut buffer = Vec::with_capacity(length + 1);
@@ -164,7 +184,11 @@ unsafe fn load_texture(gl: &gl::Gl, path: &str) -> Result<GLuint, String> {
 
   let image = image::open(path).map_err(|e| e.to_string())?;
   let (width, height) = image.dimensions();
-  let format = if image.color().channel_count() == 3 { gl::RGB } else { gl::RGBA };
+  let format = if image.color().channel_count() == 3 {
+    gl::RGB
+  } else {
+    gl::RGBA
+  };
   gl.BindTexture(gl::TEXTURE_2D, texture);
   gl.TexImage2D(
     gl::TEXTURE_2D,
@@ -181,7 +205,11 @@ unsafe fn load_texture(gl: &gl::Gl, path: &str) -> Result<GLuint, String> {
 
   gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
   gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
-  gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR_MIPMAP_LINEAR as i32);
+  gl.TexParameteri(
+    gl::TEXTURE_2D,
+    gl::TEXTURE_MIN_FILTER,
+    gl::LINEAR_MIPMAP_LINEAR as i32,
+  );
   gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
 
   gl.BindTexture(gl::TEXTURE_2D, 0);
@@ -258,10 +286,71 @@ fn main() -> Result<(), String> {
     let fragment_shader = compile_shader(&gl, FRAGMENT_SHADER, gl::FRAGMENT_SHADER)?;
     link_program(&gl, vertex_shader, fragment_shader)?
   };
-  let screen_programm = {
+  let lyon_program = {
+    let vertex_shader = compile_shader(&gl, LYON_VERTEX_SHADER, gl::VERTEX_SHADER)?;
+    let fragment_shader = compile_shader(&gl, LYON_FRAGMENT_SHADER, gl::FRAGMENT_SHADER)?;
+    link_program(&gl, vertex_shader, fragment_shader)?
+  };
+  let screen_program = {
     let vertex_shader = compile_shader(&gl, FBO_VERTEX_SHADER, gl::VERTEX_SHADER)?;
     let fragment_shader = compile_shader(&gl, FBO_FRAGMENT_SHADER, gl::FRAGMENT_SHADER)?;
     link_program(&gl, vertex_shader, fragment_shader)?
+  };
+
+  let (lyon_vao, lyon_vbo, lyon_ebo, lyon_indices) = unsafe {
+    use lyon::math::{rect, Point};
+    use lyon::path::{builder::*, Winding};
+    use lyon::tessellation::{StrokeTessellator, StrokeOptions, VertexBuffers};
+    use lyon::tessellation::geometry_builder::simple_builder;
+
+    let mut geometry: VertexBuffers<Point, u16> = VertexBuffers::new();
+    let mut geometry_builder = simple_builder(&mut geometry);
+    let mut tessellator = StrokeTessellator::new();
+    let mut options = StrokeOptions::default();
+    options.line_width = 0.1;
+    let mut builder = tessellator.builder(
+      &options,
+      &mut geometry_builder,
+    );
+    builder.add_rectangle(
+      &rect(0.0, 0.0, 1.0, 1.0),
+      Winding::Positive,
+    );
+    builder.build().unwrap();
+
+    let (mut vao, mut vbo, mut ebo) = (0, 0, 0);
+    gl.GenVertexArrays(1, &mut vao);
+    gl.GenBuffers(1, &mut vbo);
+    gl.GenBuffers(1, &mut ebo);
+    gl.BindVertexArray(vao);
+    gl.BindBuffer(gl::ARRAY_BUFFER, vbo);
+    gl.BufferData(
+      gl::ARRAY_BUFFER,
+      (geometry.vertices.len() * std::mem::size_of::<Point>()) as GLsizeiptr,
+      geometry.vertices.as_ptr() as *const GLvoid,
+      gl::STATIC_DRAW,
+    );
+    gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+    gl.BufferData(
+      gl::ELEMENT_ARRAY_BUFFER,
+      (geometry.indices.len() * std::mem::size_of::<u16>()) as GLsizeiptr,
+      geometry.indices.as_ptr() as *const GLvoid,
+      gl::STATIC_DRAW,
+    );
+
+    let pos_attr =
+      gl.GetAttribLocation(cube_program, CString::new("Position").unwrap().into_raw());
+    gl.EnableVertexAttribArray(pos_attr as u32);
+    gl.VertexAttribPointer(
+      pos_attr as u32,
+      3,
+      gl::FLOAT,
+      gl::FALSE,
+      (std::mem::size_of::<Point>()) as i32, // offset of each point
+      std::ptr::null(),
+    );
+
+    (vao, vbo, ebo, geometry.indices)
   };
 
   let (cube_vao, cube_vbo, cube_ebo) = unsafe {
@@ -280,12 +369,13 @@ fn main() -> Result<(), String> {
     gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
     gl.BufferData(
       gl::ELEMENT_ARRAY_BUFFER,
-      (CUBE_INDICES.len() * std::mem::size_of::<u32>()) as GLsizeiptr,
+      (CUBE_INDICES.len() * std::mem::size_of::<u16>()) as GLsizeiptr,
       CUBE_INDICES.as_ptr() as *const GLvoid,
       gl::STATIC_DRAW,
     );
 
-    let pos_attr = gl.GetAttribLocation(cube_program, CString::new("Position").unwrap().into_raw());
+    let pos_attr =
+      gl.GetAttribLocation(cube_program, CString::new("Position").unwrap().into_raw());
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
@@ -324,7 +414,10 @@ fn main() -> Result<(), String> {
       gl::STATIC_DRAW,
     );
 
-    let pos_attr = gl.GetAttribLocation(screen_programm, CString::new("Position").unwrap().into_raw());
+    let pos_attr = gl.GetAttribLocation(
+      screen_program,
+      CString::new("Position").unwrap().into_raw(),
+    );
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
@@ -335,8 +428,10 @@ fn main() -> Result<(), String> {
       std::ptr::null(),
     );
 
-    let texture_coords_attr =
-      gl.GetAttribLocation(screen_programm, CString::new("TexCoords").unwrap().into_raw());
+    let texture_coords_attr = gl.GetAttribLocation(
+      screen_program,
+      CString::new("TexCoords").unwrap().into_raw(),
+    );
     gl.EnableVertexAttribArray(texture_coords_attr as u32);
     gl.VertexAttribPointer(
       texture_coords_attr as u32,
@@ -361,9 +456,12 @@ fn main() -> Result<(), String> {
   };
 
   let (frame_buffer, texture_color_buffer) = unsafe {
-    gl.UseProgram(screen_programm);
+    gl.UseProgram(screen_program);
     gl.Uniform1i(
-      gl.GetUniformLocation(screen_programm, CString::new("uTexture").unwrap().into_raw()),
+      gl.GetUniformLocation(
+        screen_program,
+        CString::new("uTexture").unwrap().into_raw(),
+      ),
       0,
     );
 
@@ -387,13 +485,24 @@ fn main() -> Result<(), String> {
     );
     gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
     gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
-    gl.FramebufferTexture2D(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, texture_color_buffer, 0);
+    gl.FramebufferTexture2D(
+      gl::FRAMEBUFFER,
+      gl::COLOR_ATTACHMENT0,
+      gl::TEXTURE_2D,
+      texture_color_buffer,
+      0,
+    );
 
     let mut rbo = 0;
     gl.GenRenderbuffers(1, &mut rbo);
     gl.BindRenderbuffer(gl::RENDERBUFFER, rbo);
     gl.RenderbufferStorage(gl::RENDERBUFFER, gl::DEPTH24_STENCIL8, 320, 200);
-    gl.FramebufferRenderbuffer(gl::FRAMEBUFFER, gl::DEPTH_STENCIL_ATTACHMENT, gl::RENDERBUFFER, rbo);
+    gl.FramebufferRenderbuffer(
+      gl::FRAMEBUFFER,
+      gl::DEPTH_STENCIL_ATTACHMENT,
+      gl::RENDERBUFFER,
+      rbo,
+    );
     if gl.CheckFramebufferStatus(gl::FRAMEBUFFER) != gl::FRAMEBUFFER_COMPLETE {
       println!("ERROR::FRAMEBUFFER:: Framebuffer is not complete!");
     }
@@ -416,6 +525,8 @@ fn main() -> Result<(), String> {
     let seconds = timer.ticks() as f32 / 1000.0;
     let delta = seconds - last;
     last = seconds;
+
+    println!("{}", 1.0 / delta);
 
     for event in event_pump.poll_iter() {
       match event {
@@ -473,6 +584,18 @@ fn main() -> Result<(), String> {
       gl.ActiveTexture(gl::TEXTURE0);
       gl.BindTexture(gl::TEXTURE_2D, cube_texture);
 
+      let view =
+        glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
+      let aspect = 300.0 / 200.0;
+      let projection = glam::Mat4::orthographic_rh_gl(
+        -aspect * camera_zoom,
+        aspect * camera_zoom,
+        -camera_zoom,
+        camera_zoom,
+        0.1,
+        100.0,
+      );
+
       for (i, pos) in CUBE_POSITIONS.iter().enumerate() {
         let mvp_mat = {
           let model = glam::Mat4::from_rotation_translation(
@@ -481,17 +604,6 @@ fn main() -> Result<(), String> {
               i as f32 * seconds * 20.0f32.to_radians(),
             ),
             glam::Vec3::from(*pos),
-          );
-          let view =
-            glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
-          let aspect = 300.0 / 200.0;
-          let projection = glam::Mat4::orthographic_rh_gl(
-            -aspect * camera_zoom,
-            aspect * camera_zoom,
-            -camera_zoom,
-            camera_zoom,
-            0.1,
-            100.0,
           );
           projection * view * model
         };
@@ -505,15 +617,90 @@ fn main() -> Result<(), String> {
         gl.DrawElements(
           gl::TRIANGLES,
           CUBE_INDICES.len() as i32,
-          gl::UNSIGNED_INT,
+          gl::UNSIGNED_SHORT,
           std::ptr::null(),
         );
       }
 
+      //
+      gl.UseProgram(lyon_program);
+      gl.BindVertexArray(lyon_vao);
+      let mvp_mat = {
+        let model = glam::Mat4::from_translation(
+          glam::Vec3::new(-0.5, -0.5, 1.0),
+        );
+        let view =
+          glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
+        let aspect = 300.0 / 200.0;
+        let projection = glam::Mat4::orthographic_rh_gl(
+          -aspect * camera_zoom,
+          aspect * camera_zoom,
+          -camera_zoom,
+          camera_zoom,
+          0.1,
+          100.0,
+        );
+        projection * view * model
+      };
+
+      gl.UniformMatrix4fv(
+        gl.GetUniformLocation(lyon_program, CString::new("uMVP").unwrap().into_raw()),
+        1,
+        gl::FALSE,
+        mvp_mat.to_cols_array().as_ptr(),
+      );
+
+      gl.DrawElements(
+        gl::TRIANGLES,
+        lyon_indices.len() as i32,
+        gl::UNSIGNED_SHORT,
+        std::ptr::null(),
+      );
+      //
+
+      //
+      gl.UseProgram(lyon_program);
+      gl.BindVertexArray(lyon_vao);
+      let mvp_mat = {
+        let model = glam::Mat4::from_translation(
+          glam::Vec3::new(-0.5, -0.5, 1.0),
+        );
+        let model = model * glam::Mat4::from_scale(
+          glam::Vec3::new(2.0, 2.0, 1.0),
+        );
+        let view =
+          glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
+        let aspect = 300.0 / 200.0;
+        let projection = glam::Mat4::orthographic_rh_gl(
+          -aspect * camera_zoom,
+          aspect * camera_zoom,
+          -camera_zoom,
+          camera_zoom,
+          0.1,
+          100.0,
+        );
+        projection * view * model
+      };
+
+      gl.UniformMatrix4fv(
+        gl.GetUniformLocation(lyon_program, CString::new("uMVP").unwrap().into_raw()),
+        1,
+        gl::FALSE,
+        mvp_mat.to_cols_array().as_ptr(),
+      );
+
+      gl.DrawElements(
+        gl::TRIANGLES,
+        lyon_indices.len() as i32,
+        gl::UNSIGNED_SHORT,
+        std::ptr::null(),
+      );
+      //
+
       gl.BindFramebuffer(gl::FRAMEBUFFER, 0);
       gl.Viewport(0, 0, viewport_w, viewport_h);
       gl.Disable(gl::DEPTH_TEST);
-      gl.UseProgram(screen_programm);
+      gl.UseProgram(screen_program);
       gl.BindVertexArray(screen_vao);
       gl.ActiveTexture(gl::TEXTURE0);
       gl.BindTexture(gl::TEXTURE_2D, texture_color_buffer);
@@ -528,12 +715,16 @@ fn main() -> Result<(), String> {
   unsafe {
     gl.DeleteVertexArrays(1, &cube_vao);
     gl.DeleteVertexArrays(1, &screen_vao);
+    gl.DeleteVertexArrays(1, &lyon_vao);
     gl.DeleteBuffers(1, &cube_vbo);
     gl.DeleteBuffers(1, &cube_ebo);
+    gl.DeleteBuffers(1, &lyon_vbo);
+    gl.DeleteBuffers(1, &lyon_ebo);
     gl.DeleteBuffers(1, &cube_texture);
     gl.DeleteBuffers(1, &screen_vbo);
     gl.DeleteProgram(cube_program);
-    gl.DeleteProgram(screen_programm);
+    gl.DeleteProgram(screen_program);
+    gl.DeleteProgram(lyon_program);
     gl.DeleteFramebuffers(1, &frame_buffer);
   }
 
