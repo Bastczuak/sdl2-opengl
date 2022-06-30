@@ -11,6 +11,15 @@ use sdl2::video::GLProfile;
 use std::ffi::CString;
 use std::ops::Deref;
 
+macro_rules! get_offset {
+    ($type:ty, $field:tt) => {{
+        let dummy = ::core::mem::MaybeUninit::<$type>::uninit();
+        let dummy_ptr = dummy.as_ptr();
+        let field_ptr = unsafe { ::core::ptr::addr_of!((*dummy_ptr).$field) };
+        field_ptr as usize - dummy_ptr as usize
+    }};
+}
+
 pub struct Gl {
   inner: std::rc::Rc<gl::Gl>,
 }
@@ -93,25 +102,34 @@ void main() {
 }
 "#;
 
-
 const LYON_VERTEX_SHADER: &str = r#"
 #version 330 core
 
 layout (location = 0) in vec2 Position;
+layout (location = 1) in vec4 Color;
 
 uniform mat4 uMVP;
 
+out VERTEX_SHADER_OUTPUT {
+  vec4 Color;
+} OUT;
+
 void main() {
   gl_Position = uMVP * vec4(Position, 0.0, 1.0);
+  OUT.Color = Color;
 }
 "#;
 const LYON_FRAGMENT_SHADER: &str = r#"
 #version 330 core
 
+in VERTEX_SHADER_OUTPUT {
+  vec4 Color;
+} IN;
+
 out vec4 Color;
 
 void main() {
-  Color = vec4(0.5, 0.0, 0.0, 1.0);
+  Color = IN.Color;
 }
 "#;
 
@@ -252,12 +270,8 @@ fn link_program(
 
 fn main() -> Result<(), String> {
   let quad_vertices = [
-    -1.0f32, 1.0, 0.0, 1.0,
-    -1.0, -1.0, 0.0, 0.0,
-    1.0, -1.0, 1.0, 0.0,
-    -1.0, 1.0, 0.0, 1.0,
-    1.0, -1.0, 1.0, 0.0,
-    1.0, 1.0, 1.0, 1.0,
+    -1.0f32, 1.0, 0.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 0.0, -1.0, 1.0, 0.0, 1.0,
+    1.0, -1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0,
   ];
 
   let sdl_context = sdl2::init().unwrap();
@@ -298,30 +312,47 @@ fn main() -> Result<(), String> {
   };
 
   let (lyon_vao, lyon_vbo, lyon_ebo, lyon_indices) = unsafe {
-    use lyon::math::{rect, Point};
-    use lyon::path::{builder::*, Winding};
-    use lyon::tessellation::{StrokeTessellator, StrokeOptions, VertexBuffers};
-    use lyon::tessellation::geometry_builder::simple_builder;
+    use lyon::math::rect;
+    use lyon::tessellation::{
+      BuffersBuilder, StrokeOptions, StrokeTessellator, StrokeVertex,
+      StrokeVertexConstructor, VertexBuffers,
+    };
 
-    let mut geometry: VertexBuffers<Point, u16> = VertexBuffers::new();
-    let mut geometry_builder = simple_builder(&mut geometry);
+    #[allow(dead_code)]
+    #[repr(C)]
+    struct MyVertex {
+      position: [f32; 2],
+      color: [f32; 4],
+    }
+    struct WithColor([f32; 4]);
+
+    impl StrokeVertexConstructor<MyVertex> for WithColor {
+      fn new_vertex(&mut self, vertex: StrokeVertex) -> MyVertex {
+        MyVertex {
+          position: vertex.position().to_array(),
+          color: self.0,
+        }
+      }
+    }
+
+    let mut geometry: VertexBuffers<MyVertex, u16> = VertexBuffers::new();
     let mut tessellator = StrokeTessellator::new();
     let mut options = StrokeOptions::default();
     options.line_width = 0.1;
-    let mut builder = tessellator.builder(
-      &options,
-      &mut geometry_builder,
-    );
-    builder.add_rectangle(
-      &rect(0.0, 0.0, 1.0, 1.0),
-      Winding::Positive,
-    );
-
-    builder.add_rectangle(
-      &rect(-0.5, -0.5, 2.0, 2.0),
-      Winding::Positive,
-    );
-    builder.build().unwrap();
+    tessellator
+      .tessellate_rectangle(
+        &rect(0.0, 0.0, 1.0, 1.0),
+        &options,
+        &mut BuffersBuilder::new(&mut geometry, WithColor([0.0, 1.0, 0.0, 1.0])),
+      )
+      .unwrap();
+    tessellator
+      .tessellate_rectangle(
+        &rect(-0.5, -0.5, 2.0, 2.0),
+        &options,
+        &mut BuffersBuilder::new(&mut geometry, WithColor([1.0, 0.0, 0.0, 1.0])),
+      )
+      .unwrap();
 
     let (mut vao, mut vbo, mut ebo) = (0, 0, 0);
     gl.GenVertexArrays(1, &mut vao);
@@ -331,7 +362,7 @@ fn main() -> Result<(), String> {
     gl.BindBuffer(gl::ARRAY_BUFFER, vbo);
     gl.BufferData(
       gl::ARRAY_BUFFER,
-      (geometry.vertices.len() * std::mem::size_of::<Point>()) as GLsizeiptr,
+      (geometry.vertices.len() * std::mem::size_of::<MyVertex>()) as GLsizeiptr,
       geometry.vertices.as_ptr() as *const GLvoid,
       gl::STATIC_DRAW,
     );
@@ -344,15 +375,27 @@ fn main() -> Result<(), String> {
     );
 
     let pos_attr =
-      gl.GetAttribLocation(cube_program, CString::new("Position").unwrap().into_raw());
+      gl.GetAttribLocation(lyon_program, CString::new("Position").unwrap().into_raw());
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
       3,
       gl::FLOAT,
       gl::FALSE,
-      (std::mem::size_of::<Point>()) as i32, // offset of each point
+      (std::mem::size_of::<MyVertex>()) as i32,
       std::ptr::null(),
+    );
+
+    let color_attr =
+      gl.GetAttribLocation(lyon_program, CString::new("Color").unwrap().into_raw());
+    gl.EnableVertexAttribArray(color_attr as u32);
+    gl.VertexAttribPointer(
+      color_attr as u32,
+      3,
+      gl::FLOAT,
+      gl::FALSE,
+      (std::mem::size_of::<MyVertex>()) as i32,
+      get_offset!(MyVertex, color) as *const GLvoid,
     );
 
     (vao, vbo, ebo, geometry.indices)
@@ -387,7 +430,7 @@ fn main() -> Result<(), String> {
       3,
       gl::FLOAT,
       gl::FALSE,
-      (4 * std::mem::size_of::<f32>()) as i32, // offset of each point
+      (4 * std::mem::size_of::<f32>()) as i32,
       std::ptr::null(),
     );
 
@@ -399,8 +442,8 @@ fn main() -> Result<(), String> {
       2,
       gl::FLOAT,
       gl::FALSE,
-      (4 * std::mem::size_of::<f32>()) as i32, // offset of each point
-      (2 * std::mem::size_of::<f32>()) as *const GLvoid, // offset of each point
+      (4 * std::mem::size_of::<f32>()) as i32,
+      (2 * std::mem::size_of::<f32>()) as *const GLvoid,
     );
 
     (vao, vbo, ebo)
@@ -419,10 +462,8 @@ fn main() -> Result<(), String> {
       gl::STATIC_DRAW,
     );
 
-    let pos_attr = gl.GetAttribLocation(
-      screen_program,
-      CString::new("Position").unwrap().into_raw(),
-    );
+    let pos_attr =
+      gl.GetAttribLocation(screen_program, CString::new("Position").unwrap().into_raw());
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
@@ -463,10 +504,7 @@ fn main() -> Result<(), String> {
   let (frame_buffer, texture_color_buffer) = unsafe {
     gl.UseProgram(screen_program);
     gl.Uniform1i(
-      gl.GetUniformLocation(
-        screen_program,
-        CString::new("uTexture").unwrap().into_raw(),
-      ),
+      gl.GetUniformLocation(screen_program, CString::new("uTexture").unwrap().into_raw()),
       0,
     );
 
@@ -589,8 +627,7 @@ fn main() -> Result<(), String> {
       gl.ActiveTexture(gl::TEXTURE0);
       gl.BindTexture(gl::TEXTURE_2D, cube_texture);
 
-      let view =
-        glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
+      let view = glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
       let aspect = 300.0 / 200.0;
       let projection = glam::Mat4::orthographic_rh_gl(
         -aspect * camera_zoom,
@@ -632,20 +669,8 @@ fn main() -> Result<(), String> {
       gl.BindVertexArray(lyon_vao);
       let mvp_mat = {
         let mut model = glam::Mat4::from_rotation_z(seconds * 20.0f32.to_radians());
-        model *= glam::Mat4::from_translation(
-          glam::Vec3::new(-0.5, -0.5, 1.0),
-        );
-        let view =
-          glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
-        let aspect = 300.0 / 200.0;
-        let projection = glam::Mat4::orthographic_rh_gl(
-          -aspect * camera_zoom,
-          aspect * camera_zoom,
-          -camera_zoom,
-          camera_zoom,
-          0.1,
-          100.0,
-        );
+        model *= glam::Mat4::from_translation(glam::Vec3::new(-0.5, -0.5, 1.0));
+        let view = glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
         projection * view * model
       };
 

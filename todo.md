@@ -1,3 +1,7 @@
--fbo aber anstelle mit 2d
--funktionen finden um polygone zu zeichnen
--try to use glBlitFramebuffer for downscaling
+- [x] fbo aber anstelle mit 2d
+- [x] funktionen finden um poly gone zu zeichnen
+- [x] lyon with color 
+- [] batch rendering 
+- [] instance rendering 
+- [] text rendering 
+- [] try to use glBlitFramebuffe r for downscaling
