@@ -13,9 +13,9 @@ use std::ops::Deref;
 
 macro_rules! get_offset {
     ($type:ty, $field:tt) => {{
-        let dummy = ::core::mem::MaybeUninit::<$type>::uninit();
+        let dummy = core::mem::MaybeUninit::<$type>::uninit();
         let dummy_ptr = dummy.as_ptr();
-        let field_ptr = unsafe { ::core::ptr::addr_of!((*dummy_ptr).$field) };
+        let field_ptr = core::ptr::addr_of!((*dummy_ptr).$field);
         field_ptr as usize - dummy_ptr as usize
     }};
 }
@@ -105,7 +105,7 @@ void main() {
 const LYON_VERTEX_SHADER: &str = r#"
 #version 330 core
 
-layout (location = 0) in vec2 Position;
+layout (location = 0) in vec3 Position;
 layout (location = 1) in vec4 Color;
 
 uniform mat4 uMVP;
@@ -115,7 +115,7 @@ out VERTEX_SHADER_OUTPUT {
 } OUT;
 
 void main() {
-  gl_Position = uMVP * vec4(Position, 0.0, 1.0);
+  gl_Position = uMVP * vec4(Position, 1.0);
   OUT.Color = Color;
 }
 "#;
@@ -270,8 +270,15 @@ fn link_program(
 
 fn main() -> Result<(), String> {
   let quad_vertices = [
-    -1.0f32, 1.0, 0.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 0.0, -1.0, 1.0, 0.0, 1.0,
-    1.0, -1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+    -1.0f32, 1.0, 0.0,
+    1.0, -1.0, -1.0,
+    0.0, 0.0, 1.0,
+    -1.0, 1.0, 0.0,
+
+    -1.0, 1.0, 0.0,
+    1.0, 1.0, -1.0,
+    1.0, 0.0, 1.0,
+    1.0, 1.0, 1.0,
   ];
 
   let sdl_context = sdl2::init().unwrap();
@@ -318,18 +325,19 @@ fn main() -> Result<(), String> {
       StrokeVertexConstructor, VertexBuffers,
     };
 
-    #[allow(dead_code)]
     #[repr(C)]
     struct MyVertex {
-      position: [f32; 2],
+      position: [f32; 3],
       color: [f32; 4],
     }
-    struct WithColor([f32; 4]);
+    struct WithColorAndZ([f32; 4], f32);
 
-    impl StrokeVertexConstructor<MyVertex> for WithColor {
+    impl StrokeVertexConstructor<MyVertex> for WithColorAndZ {
       fn new_vertex(&mut self, vertex: StrokeVertex) -> MyVertex {
+        let position = vertex.position().to_array();
+        let position = [position[0], position[1], self.1];
         MyVertex {
-          position: vertex.position().to_array(),
+          position,
           color: self.0,
         }
       }
@@ -343,14 +351,14 @@ fn main() -> Result<(), String> {
       .tessellate_rectangle(
         &rect(0.0, 0.0, 1.0, 1.0),
         &options,
-        &mut BuffersBuilder::new(&mut geometry, WithColor([0.0, 1.0, 0.0, 1.0])),
+        &mut BuffersBuilder::new(&mut geometry, WithColorAndZ([0.0, 1.0, 0.0, 1.0], -1.0)),
       )
       .unwrap();
     tessellator
       .tessellate_rectangle(
         &rect(-0.5, -0.5, 2.0, 2.0),
         &options,
-        &mut BuffersBuilder::new(&mut geometry, WithColor([1.0, 0.0, 0.0, 1.0])),
+        &mut BuffersBuilder::new(&mut geometry, WithColorAndZ([1.0, 0.0, 0.0, 1.0], 1.0)),
       )
       .unwrap();
 

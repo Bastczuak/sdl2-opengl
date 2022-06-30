@@ -4,4 +4,4 @@
 - [] batch rendering 
 - [] instance rendering 
 - [] text rendering 
-- [] try to use glBlitFramebuffe r for downscaling
+- [] try to use glBlitFramebuffer for downscaling
