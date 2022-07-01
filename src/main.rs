@@ -45,16 +45,10 @@ impl Deref for Gl {
 
 const CUBE_VERTICES: [f32; 16] = [
   // positions //texture coords
-  0.5, 0.5, 1.0, 1.0,
-  0.5, -0.5, 1.0, 0.0,
-  -0.5, -0.5, 0.0, 0.0,
-  -0.5, 0.5, 0.0, 1.0,
+  0.5, 0.5, 1.0, 1.0, 0.5, -0.5, 1.0, 0.0, -0.5, -0.5, 0.0, 0.0, -0.5, 0.5, 0.0, 1.0,
 ];
 
-const CUBE_INDICES: [u16; 6] = [
-  0, 1, 3,
-  1, 2, 3,
-];
+const CUBE_INDICES: [u16; 6] = [0, 1, 3, 1, 2, 3];
 
 const CUBE_POSITIONS: [(f32, f32, f32); 10] = [
   (0.0, 0.0, 0.0),
@@ -105,7 +99,7 @@ void main() {
 const LYON_VERTEX_SHADER: &str = r#"
 #version 330 core
 
-layout (location = 0) in vec3 Position;
+layout (location = 0) in vec4 Position;
 layout (location = 1) in vec4 Color;
 
 uniform mat4 uMVP;
@@ -115,7 +109,7 @@ out VERTEX_SHADER_OUTPUT {
 } OUT;
 
 void main() {
-  gl_Position = uMVP * vec4(Position, 1.0);
+  gl_Position = uMVP * Position;
   OUT.Color = Color;
 }
 "#;
@@ -270,15 +264,8 @@ fn link_program(
 
 fn main() -> Result<(), String> {
   let quad_vertices = [
-    -1.0f32, 1.0, 0.0,
-    1.0, -1.0, -1.0,
-    0.0, 0.0, 1.0,
-    -1.0, 1.0, 0.0,
-
-    -1.0, 1.0, 0.0,
-    1.0, 1.0, -1.0,
-    1.0, 0.0, 1.0,
-    1.0, 1.0, 1.0,
+    -1.0f32, 1.0, 0.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 0.0, -1.0, 1.0, 0.0, 1.0,
+    1.0, -1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0,
   ];
 
   let sdl_context = sdl2::init().unwrap();
@@ -327,18 +314,22 @@ fn main() -> Result<(), String> {
 
     #[repr(C)]
     struct MyVertex {
-      position: [f32; 3],
-      color: [f32; 4],
+      position: [f32; 4],
+      color_rgba: [f32; 4],
     }
-    struct WithColorAndZ([f32; 4], f32);
+    struct MyVertexConfig {
+      position: glam::Vec3,
+      color_rgba: glam::Vec4,
+    }
 
-    impl StrokeVertexConstructor<MyVertex> for WithColorAndZ {
+    impl StrokeVertexConstructor<MyVertex> for MyVertexConfig {
       fn new_vertex(&mut self, vertex: StrokeVertex) -> MyVertex {
         let position = vertex.position().to_array();
-        let position = [position[0], position[1], self.1];
+        let position = glam::Mat4::from_translation(self.position)
+          * glam::Vec4::new(position[0], position[1], 0.0, 1.0);
         MyVertex {
-          position,
-          color: self.0,
+          position: position.to_array(),
+          color_rgba: self.color_rgba.to_array(),
         }
       }
     }
@@ -347,18 +338,63 @@ fn main() -> Result<(), String> {
     let mut tessellator = StrokeTessellator::new();
     let mut options = StrokeOptions::default();
     options.line_width = 0.1;
+    let (w, h) = (1.0, 1.0);
     tessellator
       .tessellate_rectangle(
-        &rect(0.0, 0.0, 1.0, 1.0),
+        &rect(0.0, 0.0, w, h),
         &options,
-        &mut BuffersBuilder::new(&mut geometry, WithColorAndZ([0.0, 1.0, 0.0, 1.0], -1.0)),
+        &mut BuffersBuilder::new(
+          &mut geometry,
+          MyVertexConfig {
+            color_rgba: glam::Vec4::new(0.0, 1.0, 0.0, 1.0),
+            position: glam::Vec3::new(w / -2.0, h / -2.0, 0.0)
+              + glam::Vec3::new(2.0, 2.0, -1.0),
+          },
+        ),
+      )
+      .unwrap();
+    let (w, h) = (2.0, 2.0);
+    tessellator
+      .tessellate_rectangle(
+        &rect(0.0, 0.0, w, h),
+        &options,
+        &mut BuffersBuilder::new(
+          &mut geometry,
+          MyVertexConfig {
+            color_rgba: glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+            position: glam::Vec3::new(w / -2.0, h / -2.0, 0.0)
+              + glam::Vec3::new(2.0, 2.0, 1.0),
+          },
+        ),
+      )
+      .unwrap();
+    let (w, h) = (1.0, 1.0);
+    tessellator
+      .tessellate_rectangle(
+        &rect(0.0, 0.0, w, h),
+        &options,
+        &mut BuffersBuilder::new(
+          &mut geometry,
+          MyVertexConfig {
+            color_rgba: glam::Vec4::new(0.5, 0.5, 0.5, 1.0),
+            position: glam::Vec3::new(w / -2.0, h / -2.0, 0.0)
+              + glam::Vec3::new(0.0, 0.0, 1.0),
+          },
+        ),
       )
       .unwrap();
     tessellator
       .tessellate_rectangle(
-        &rect(-0.5, -0.5, 2.0, 2.0),
+        &rect(0.0, 0.0, w, h),
         &options,
-        &mut BuffersBuilder::new(&mut geometry, WithColorAndZ([1.0, 0.0, 0.0, 1.0], 1.0)),
+        &mut BuffersBuilder::new(
+          &mut geometry,
+          MyVertexConfig {
+            color_rgba: glam::Vec4::new(1.0, 1.0, 0.0, 1.0),
+            position: glam::Vec3::new(w / -2.0, h / -2.0, 0.0)
+              + glam::Vec3::new(1.0, 1.0, 1.0),
+          },
+        ),
       )
       .unwrap();
 
@@ -403,7 +439,7 @@ fn main() -> Result<(), String> {
       gl::FLOAT,
       gl::FALSE,
       (std::mem::size_of::<MyVertex>()) as i32,
-      get_offset!(MyVertex, color) as *const GLvoid,
+      get_offset!(MyVertex, color_rgba) as *const GLvoid,
     );
 
     (vao, vbo, ebo, geometry.indices)
@@ -676,8 +712,7 @@ fn main() -> Result<(), String> {
       gl.UseProgram(lyon_program);
       gl.BindVertexArray(lyon_vao);
       let mvp_mat = {
-        let mut model = glam::Mat4::from_rotation_z(seconds * 20.0f32.to_radians());
-        model *= glam::Mat4::from_translation(glam::Vec3::new(-0.5, -0.5, 1.0));
+        let model = glam::Mat4::from_rotation_z(seconds * 20.0f32.to_radians());
         let view = glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
         projection * view * model
       };
