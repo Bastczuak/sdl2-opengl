@@ -1,7 +1,7 @@
 - [x] fbo aber anstelle mit 2d
 - [x] funktionen finden um poly gone zu zeichnen
 - [x] lyon with color 
-- [] batch rendering 
+- [x] batch rendering 
 - [] instance rendering 
 - [] text rendering 
 - [] try to use glBlitFramebuffer for downscaling

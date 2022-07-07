@@ -5,19 +5,24 @@ mod gl {
 
 use gl::types::*;
 use image::GenericImageView;
+use lyon::math::{Point, rect};
+use lyon::tessellation::{
+  BuffersBuilder, StrokeOptions, StrokeTessellator, StrokeVertex, StrokeVertexConstructor, VertexBuffers,
+};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::keyboard::Keycode;
 use sdl2::video::GLProfile;
 use std::ffi::CString;
 use std::ops::Deref;
+use lyon::tessellation::geometry_builder::simple_builder;
 
 macro_rules! get_offset {
-    ($type:ty, $field:tt) => {{
-        let dummy = core::mem::MaybeUninit::<$type>::uninit();
-        let dummy_ptr = dummy.as_ptr();
-        let field_ptr = core::ptr::addr_of!((*dummy_ptr).$field);
-        field_ptr as usize - dummy_ptr as usize
-    }};
+  ($type:ty, $field:tt) => {{
+    let dummy = core::mem::MaybeUninit::<$type>::uninit();
+    let dummy_ptr = dummy.as_ptr();
+    let field_ptr = core::ptr::addr_of!((*dummy_ptr).$field);
+    field_ptr as usize - dummy_ptr as usize
+  }};
 }
 
 pub struct Gl {
@@ -26,8 +31,8 @@ pub struct Gl {
 
 impl Gl {
   fn load_with<F>(load_fn: F) -> Self
-    where
-      F: FnMut(&'static str) -> *const GLvoid,
+  where
+    F: FnMut(&'static str) -> *const GLvoid,
   {
     Self {
       inner: std::rc::Rc::new(gl::Gl::load_with(load_fn)),
@@ -159,6 +164,28 @@ void main() {
 }
 "#;
 
+#[repr(C)]
+struct MyVertex {
+  position: [f32; 4],
+  color_rgba: [f32; 4],
+}
+
+struct MyVertexConfig {
+  position: glam::Mat4,
+  color_rgba: glam::Vec4,
+}
+
+impl StrokeVertexConstructor<MyVertex> for MyVertexConfig {
+  fn new_vertex(&mut self, vertex: StrokeVertex) -> MyVertex {
+    let position = vertex.position().to_array();
+    let position = self.position * glam::Vec4::new(position[0], position[1], 0.0, 1.0);
+    MyVertex {
+      position: position.to_array(),
+      color_rgba: self.color_rgba.to_array(),
+    }
+  }
+}
+
 unsafe fn create_error_buffer(length: usize) -> CString {
   let mut buffer = Vec::with_capacity(length + 1);
   buffer.extend([b' '].iter().cycle().take(length));
@@ -178,12 +205,7 @@ fn compile_shader(gl: &gl::Gl, src: &str, kind: GLenum) -> Result<GLuint, String
       let mut len = 0;
       gl.GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len);
       let error = create_error_buffer(len as usize);
-      gl.GetShaderInfoLog(
-        shader,
-        len,
-        std::ptr::null_mut(),
-        error.as_ptr() as *mut GLchar,
-      );
+      gl.GetShaderInfoLog(shader, len, std::ptr::null_mut(), error.as_ptr() as *mut GLchar);
       return Err(error.to_string_lossy().into_owned());
     }
     Ok(shader)
@@ -217,11 +239,7 @@ unsafe fn load_texture(gl: &gl::Gl, path: &str) -> Result<GLuint, String> {
 
   gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
   gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
-  gl.TexParameteri(
-    gl::TEXTURE_2D,
-    gl::TEXTURE_MIN_FILTER,
-    gl::LINEAR_MIPMAP_LINEAR as i32,
-  );
+  gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR_MIPMAP_LINEAR as i32);
   gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
 
   gl.BindTexture(gl::TEXTURE_2D, 0);
@@ -229,11 +247,7 @@ unsafe fn load_texture(gl: &gl::Gl, path: &str) -> Result<GLuint, String> {
   Ok(texture)
 }
 
-fn link_program(
-  gl: &gl::Gl,
-  vertex_shader: GLuint,
-  fragment_shader: GLuint,
-) -> Result<GLuint, String> {
+fn link_program(gl: &gl::Gl, vertex_shader: GLuint, fragment_shader: GLuint) -> Result<GLuint, String> {
   unsafe {
     let program = gl.CreateProgram();
     gl.AttachShader(program, vertex_shader);
@@ -246,12 +260,7 @@ fn link_program(
       let mut len = 0;
       gl.GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len);
       let error = create_error_buffer(len as usize);
-      gl.GetProgramInfoLog(
-        program,
-        len,
-        std::ptr::null_mut(),
-        error.as_ptr() as *mut GLchar,
-      );
+      gl.GetProgramInfoLog(program, len, std::ptr::null_mut(), error.as_ptr() as *mut GLchar);
       return Err(error.to_string_lossy().into_owned());
     }
 
@@ -264,8 +273,8 @@ fn link_program(
 
 fn main() -> Result<(), String> {
   let quad_vertices = [
-    -1.0f32, 1.0, 0.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 0.0, -1.0, 1.0, 0.0, 1.0,
-    1.0, -1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+    -1.0f32, 1.0, 0.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 0.0, -1.0, 1.0, 0.0, 1.0, 1.0, -1.0, 1.0, 0.0, 1.0,
+    1.0, 1.0, 1.0,
   ];
 
   let sdl_context = sdl2::init().unwrap();
@@ -305,121 +314,42 @@ fn main() -> Result<(), String> {
     link_program(&gl, vertex_shader, fragment_shader)?
   };
 
-  let (lyon_vao, lyon_vbo, lyon_ebo, lyon_indices) = unsafe {
-    use lyon::math::rect;
-    use lyon::tessellation::{
-      BuffersBuilder, StrokeOptions, StrokeTessellator, StrokeVertex,
-      StrokeVertexConstructor, VertexBuffers,
-    };
-
-    #[repr(C)]
-    struct MyVertex {
-      position: [f32; 4],
-      color_rgba: [f32; 4],
-    }
-    struct MyVertexConfig {
-      position: glam::Vec3,
-      color_rgba: glam::Vec4,
-    }
-
-    impl StrokeVertexConstructor<MyVertex> for MyVertexConfig {
-      fn new_vertex(&mut self, vertex: StrokeVertex) -> MyVertex {
-        let position = vertex.position().to_array();
-        let position = glam::Mat4::from_translation(self.position)
-          * glam::Vec4::new(position[0], position[1], 0.0, 1.0);
-        MyVertex {
-          position: position.to_array(),
-          color_rgba: self.color_rgba.to_array(),
-        }
-      }
-    }
-
-    let mut geometry: VertexBuffers<MyVertex, u16> = VertexBuffers::new();
+  let (lyon_vao, lyon_vbo, lyon_ebo) = unsafe {
+    let mut geometry: VertexBuffers<Point, u16> = VertexBuffers::new();
+    let mut vertex_builder = simple_builder(&mut geometry);
     let mut tessellator = StrokeTessellator::new();
     let mut options = StrokeOptions::default();
     options.line_width = 0.1;
-    let (w, h) = (1.0, 1.0);
     tessellator
       .tessellate_rectangle(
-        &rect(0.0, 0.0, w, h),
+        &rect(0.0, 0.0, 1.0, 1.0),
         &options,
-        &mut BuffersBuilder::new(
-          &mut geometry,
-          MyVertexConfig {
-            color_rgba: glam::Vec4::new(0.0, 1.0, 0.0, 1.0),
-            position: glam::Vec3::new(w / -2.0, h / -2.0, 0.0)
-              + glam::Vec3::new(2.0, 2.0, -1.0),
-          },
-        ),
+        &mut vertex_builder,
       )
       .unwrap();
-    let (w, h) = (2.0, 2.0);
-    tessellator
-      .tessellate_rectangle(
-        &rect(0.0, 0.0, w, h),
-        &options,
-        &mut BuffersBuilder::new(
-          &mut geometry,
-          MyVertexConfig {
-            color_rgba: glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
-            position: glam::Vec3::new(w / -2.0, h / -2.0, 0.0)
-              + glam::Vec3::new(2.0, 2.0, 1.0),
-          },
-        ),
-      )
-      .unwrap();
-    let (w, h) = (1.0, 1.0);
-    tessellator
-      .tessellate_rectangle(
-        &rect(0.0, 0.0, w, h),
-        &options,
-        &mut BuffersBuilder::new(
-          &mut geometry,
-          MyVertexConfig {
-            color_rgba: glam::Vec4::new(0.5, 0.5, 0.5, 1.0),
-            position: glam::Vec3::new(w / -2.0, h / -2.0, 0.0)
-              + glam::Vec3::new(0.0, 0.0, 1.0),
-          },
-        ),
-      )
-      .unwrap();
-    tessellator
-      .tessellate_rectangle(
-        &rect(0.0, 0.0, w, h),
-        &options,
-        &mut BuffersBuilder::new(
-          &mut geometry,
-          MyVertexConfig {
-            color_rgba: glam::Vec4::new(1.0, 1.0, 0.0, 1.0),
-            position: glam::Vec3::new(w / -2.0, h / -2.0, 0.0)
-              + glam::Vec3::new(1.0, 1.0, 1.0),
-          },
-        ),
-      )
-      .unwrap();
-
+    println!("{}, {}", geometry.vertices.len(), geometry.indices.len());
     let (mut vao, mut vbo, mut ebo) = (0, 0, 0);
     gl.GenVertexArrays(1, &mut vao);
+
     gl.GenBuffers(1, &mut vbo);
     gl.GenBuffers(1, &mut ebo);
     gl.BindVertexArray(vao);
     gl.BindBuffer(gl::ARRAY_BUFFER, vbo);
     gl.BufferData(
       gl::ARRAY_BUFFER,
-      (geometry.vertices.len() * std::mem::size_of::<MyVertex>()) as GLsizeiptr,
-      geometry.vertices.as_ptr() as *const GLvoid,
-      gl::STATIC_DRAW,
+      (std::mem::size_of::<MyVertex>() * geometry.vertices.len() * 10000) as GLsizeiptr,
+      std::ptr::null(),
+      gl::DYNAMIC_DRAW,
     );
     gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
     gl.BufferData(
       gl::ELEMENT_ARRAY_BUFFER,
-      (geometry.indices.len() * std::mem::size_of::<u16>()) as GLsizeiptr,
-      geometry.indices.as_ptr() as *const GLvoid,
-      gl::STATIC_DRAW,
+      (std::mem::size_of::<u16>() * geometry.indices.len() * 10000) as GLsizeiptr,
+      std::ptr::null(),
+      gl::DYNAMIC_DRAW,
     );
 
-    let pos_attr =
-      gl.GetAttribLocation(lyon_program, CString::new("Position").unwrap().into_raw());
+    let pos_attr = gl.GetAttribLocation(lyon_program, CString::new("Position").unwrap().into_raw());
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
@@ -427,11 +357,10 @@ fn main() -> Result<(), String> {
       gl::FLOAT,
       gl::FALSE,
       (std::mem::size_of::<MyVertex>()) as i32,
-      std::ptr::null(),
+      get_offset!(MyVertex, position) as *const GLvoid,
     );
 
-    let color_attr =
-      gl.GetAttribLocation(lyon_program, CString::new("Color").unwrap().into_raw());
+    let color_attr = gl.GetAttribLocation(lyon_program, CString::new("Color").unwrap().into_raw());
     gl.EnableVertexAttribArray(color_attr as u32);
     gl.VertexAttribPointer(
       color_attr as u32,
@@ -442,7 +371,7 @@ fn main() -> Result<(), String> {
       get_offset!(MyVertex, color_rgba) as *const GLvoid,
     );
 
-    (vao, vbo, ebo, geometry.indices)
+    (vao, vbo, ebo)
   };
 
   let (cube_vao, cube_vbo, cube_ebo) = unsafe {
@@ -466,8 +395,7 @@ fn main() -> Result<(), String> {
       gl::STATIC_DRAW,
     );
 
-    let pos_attr =
-      gl.GetAttribLocation(cube_program, CString::new("Position").unwrap().into_raw());
+    let pos_attr = gl.GetAttribLocation(cube_program, CString::new("Position").unwrap().into_raw());
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
@@ -478,8 +406,7 @@ fn main() -> Result<(), String> {
       std::ptr::null(),
     );
 
-    let texture_coords_attr =
-      gl.GetAttribLocation(cube_program, CString::new("TexCoords").unwrap().into_raw());
+    let texture_coords_attr = gl.GetAttribLocation(cube_program, CString::new("TexCoords").unwrap().into_raw());
     gl.EnableVertexAttribArray(texture_coords_attr as u32);
     gl.VertexAttribPointer(
       texture_coords_attr as u32,
@@ -506,8 +433,7 @@ fn main() -> Result<(), String> {
       gl::STATIC_DRAW,
     );
 
-    let pos_attr =
-      gl.GetAttribLocation(screen_program, CString::new("Position").unwrap().into_raw());
+    let pos_attr = gl.GetAttribLocation(screen_program, CString::new("Position").unwrap().into_raw());
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
@@ -518,17 +444,14 @@ fn main() -> Result<(), String> {
       std::ptr::null(),
     );
 
-    let texture_coords_attr = gl.GetAttribLocation(
-      screen_program,
-      CString::new("TexCoords").unwrap().into_raw(),
-    );
+    let texture_coords_attr = gl.GetAttribLocation(screen_program, CString::new("TexCoords").unwrap().into_raw());
     gl.EnableVertexAttribArray(texture_coords_attr as u32);
     gl.VertexAttribPointer(
       texture_coords_attr as u32,
       2,
       gl::FLOAT,
       gl::FALSE,
-      (4 * std::mem::size_of::<f32>()) as i32, // offset of each point
+      (4 * std::mem::size_of::<f32>()) as i32,           // offset of each point
       (2 * std::mem::size_of::<f32>()) as *const GLvoid, // offset of each point
     );
 
@@ -584,12 +507,7 @@ fn main() -> Result<(), String> {
     gl.GenRenderbuffers(1, &mut rbo);
     gl.BindRenderbuffer(gl::RENDERBUFFER, rbo);
     gl.RenderbufferStorage(gl::RENDERBUFFER, gl::DEPTH24_STENCIL8, 320, 200);
-    gl.FramebufferRenderbuffer(
-      gl::FRAMEBUFFER,
-      gl::DEPTH_STENCIL_ATTACHMENT,
-      gl::RENDERBUFFER,
-      rbo,
-    );
+    gl.FramebufferRenderbuffer(gl::FRAMEBUFFER, gl::DEPTH_STENCIL_ATTACHMENT, gl::RENDERBUFFER, rbo);
     if gl.CheckFramebufferStatus(gl::FRAMEBUFFER) != gl::FRAMEBUFFER_COMPLETE {
       println!("ERROR::FRAMEBUFFER:: Framebuffer is not complete!");
     }
@@ -666,6 +584,8 @@ fn main() -> Result<(), String> {
       gl.ClearColor(0.1, 0.1, 0.1, 1.0);
       gl.Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
+      gl.BindBuffer(gl::ARRAY_BUFFER, cube_vbo);
+      gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, cube_ebo);
       gl.UseProgram(cube_program);
       gl.BindVertexArray(cube_vao);
       gl.ActiveTexture(gl::TEXTURE0);
@@ -708,9 +628,75 @@ fn main() -> Result<(), String> {
         );
       }
 
+      let mut a = 0;
       //
+      let mut geometry: VertexBuffers<MyVertex, u16> = VertexBuffers::new();
+      for i in -100..100 {
+        for j in -10..10 {
+          let i = i as f32;
+          let j = j as f32;
+          let mut tessellator = StrokeTessellator::new();
+          let mut options = StrokeOptions::default();
+          options.line_width = 0.1;
+          let (w, h) = (1.0, 1.0);
+          let position = glam::Mat4::from_rotation_translation(
+            glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 0.0, 1.0), seconds * 20.0f32.to_radians()),
+            glam::Vec3::new(2.0 + i, 2.0 + j, -1.0),
+          ) * glam::Mat4::from_translation(glam::Vec3::new(w / -2.0, h / -2.0, 0.0));
+          tessellator
+            .tessellate_rectangle(
+              &rect(0.0, 0.0, w, h),
+              &options,
+              &mut BuffersBuilder::new(
+                &mut geometry,
+                MyVertexConfig {
+                  color_rgba: glam::Vec4::new(0.0, 1.0, 0.0, 1.0),
+                  position,
+                },
+              ),
+            )
+            .unwrap();
+          let (w, h) = (2.0, 2.0);
+          let position = glam::Mat4::from_rotation_translation(
+            glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 0.0, 1.0), seconds * 20.0f32.to_radians()),
+            glam::Vec3::new(2.0 + i, 2.0 + j, -40.0),
+          ) * glam::Mat4::from_translation(glam::Vec3::new(w / -2.0, h / -2.0, 0.0));
+          tessellator
+            .tessellate_rectangle(
+              &rect(0.0, 0.0, w, h),
+              &options,
+              &mut BuffersBuilder::new(
+                &mut geometry,
+                MyVertexConfig {
+                  color_rgba: glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
+                  position,
+                },
+              ),
+            )
+            .unwrap();
+          a+=1;
+        }
+      }
+
+      println!("{}", a);
+
       gl.UseProgram(lyon_program);
       gl.BindVertexArray(lyon_vao);
+      gl.BindBuffer(gl::ARRAY_BUFFER, lyon_vbo);
+      gl.BufferSubData(
+        gl::ARRAY_BUFFER,
+        0,
+        (geometry.vertices.len() * std::mem::size_of::<MyVertex>()) as GLsizeiptr,
+        geometry.vertices.as_ptr() as *const GLvoid,
+      );
+      gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, lyon_ebo);
+      gl.BufferSubData(
+        gl::ELEMENT_ARRAY_BUFFER,
+        0,
+        (geometry.indices.len() * std::mem::size_of::<u16>()) as GLsizeiptr,
+        geometry.indices.as_ptr() as *const GLvoid,
+      );
+
       let mvp_mat = {
         let model = glam::Mat4::from_rotation_z(seconds * 20.0f32.to_radians());
         let view = glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
@@ -726,7 +712,7 @@ fn main() -> Result<(), String> {
 
       gl.DrawElements(
         gl::TRIANGLES,
-        lyon_indices.len() as i32,
+        geometry.indices.len() as i32,
         gl::UNSIGNED_SHORT,
         std::ptr::null(),
       );
@@ -743,8 +729,6 @@ fn main() -> Result<(), String> {
     }
 
     window.gl_swap_window();
-
-    std::thread::sleep(std::time::Duration::new(0, 1_000_000_000u32 / 60));
   }
 
   unsafe {
