@@ -5,16 +5,19 @@ mod gl {
 
 use gl::types::*;
 use image::GenericImageView;
-use lyon::math::{Point, rect};
-use lyon::tessellation::{
-  BuffersBuilder, StrokeOptions, StrokeTessellator, StrokeVertex, StrokeVertexConstructor, VertexBuffers,
+use lyon::{
+  math::{rect, Point},
+  tessellation::{
+    geometry_builder::simple_builder, BuffersBuilder, StrokeOptions, StrokeTessellator, StrokeVertex,
+    StrokeVertexConstructor, VertexBuffers,
+  },
 };
-use sdl2::event::{Event, WindowEvent};
-use sdl2::keyboard::Keycode;
-use sdl2::video::GLProfile;
-use std::ffi::CString;
-use std::ops::Deref;
-use lyon::tessellation::geometry_builder::simple_builder;
+use sdl2::{
+  event::{Event, WindowEvent},
+  keyboard::Keycode,
+  video::GLProfile,
+};
+use std::{ffi::CString, ops::Deref};
 
 macro_rules! get_offset {
   ($type:ty, $field:tt) => {{
@@ -104,8 +107,9 @@ void main() {
 const LYON_VERTEX_SHADER: &str = r#"
 #version 330 core
 
-layout (location = 0) in vec4 Position;
-layout (location = 1) in vec4 Color;
+layout (location = 0) in mat4 Transform;
+layout (location = 4) in vec4 Color;
+layout (location = 5) in vec2 Position;
 
 uniform mat4 uMVP;
 
@@ -114,7 +118,7 @@ out VERTEX_SHADER_OUTPUT {
 } OUT;
 
 void main() {
-  gl_Position = uMVP * Position;
+  gl_Position = uMVP * Transform * vec4(Position, 0.0, 1.0);
   OUT.Color = Color;
 }
 "#;
@@ -166,22 +170,29 @@ void main() {
 
 #[repr(C)]
 struct MyVertex {
-  position: [f32; 4],
+  transform_mat4_1: [f32; 4],
+  transform_mat4_2: [f32; 4],
+  transform_mat4_3: [f32; 4],
+  transform_mat4_4: [f32; 4],
   color_rgba: [f32; 4],
+  position: [f32; 2],
 }
 
 struct MyVertexConfig {
-  position: glam::Mat4,
+  transform: glam::Mat4,
   color_rgba: glam::Vec4,
 }
 
 impl StrokeVertexConstructor<MyVertex> for MyVertexConfig {
   fn new_vertex(&mut self, vertex: StrokeVertex) -> MyVertex {
-    let position = vertex.position().to_array();
-    let position = self.position * glam::Vec4::new(position[0], position[1], 0.0, 1.0);
+    let t = self.transform.to_cols_array_2d();
     MyVertex {
-      position: position.to_array(),
+      position: vertex.position().to_array(),
       color_rgba: self.color_rgba.to_array(),
+      transform_mat4_1: t[0],
+      transform_mat4_2: t[1],
+      transform_mat4_3: t[2],
+      transform_mat4_4: t[3],
     }
   }
 }
@@ -321,13 +332,8 @@ fn main() -> Result<(), String> {
     let mut options = StrokeOptions::default();
     options.line_width = 0.1;
     tessellator
-      .tessellate_rectangle(
-        &rect(0.0, 0.0, 1.0, 1.0),
-        &options,
-        &mut vertex_builder,
-      )
+      .tessellate_rectangle(&rect(0.0, 0.0, 1.0, 1.0), &options, &mut vertex_builder)
       .unwrap();
-    println!("{}, {}", geometry.vertices.len(), geometry.indices.len());
     let (mut vao, mut vbo, mut ebo) = (0, 0, 0);
     gl.GenVertexArrays(1, &mut vao);
 
@@ -349,26 +355,63 @@ fn main() -> Result<(), String> {
       gl::DYNAMIC_DRAW,
     );
 
-    let pos_attr = gl.GetAttribLocation(lyon_program, CString::new("Position").unwrap().into_raw());
-    gl.EnableVertexAttribArray(pos_attr as u32);
+    let transform_attr = gl.GetAttribLocation(lyon_program, CString::new("Transform").unwrap().into_raw()) as GLuint;
+    gl.EnableVertexAttribArray(transform_attr);
     gl.VertexAttribPointer(
-      pos_attr as u32,
-      3,
+      transform_attr,
+      4,
       gl::FLOAT,
       gl::FALSE,
       (std::mem::size_of::<MyVertex>()) as i32,
-      get_offset!(MyVertex, position) as *const GLvoid,
+      get_offset!(MyVertex, transform_mat4_1) as *const GLvoid,
     );
-
+    gl.EnableVertexAttribArray(transform_attr + 1);
+    gl.VertexAttribPointer(
+      transform_attr + 1,
+      4,
+      gl::FLOAT,
+      gl::FALSE,
+      (std::mem::size_of::<MyVertex>()) as i32,
+      get_offset!(MyVertex, transform_mat4_2) as *const GLvoid,
+    );
+    gl.EnableVertexAttribArray(transform_attr + 2);
+    gl.VertexAttribPointer(
+      transform_attr + 2,
+      4,
+      gl::FLOAT,
+      gl::FALSE,
+      (std::mem::size_of::<MyVertex>()) as i32,
+      get_offset!(MyVertex, transform_mat4_3) as *const GLvoid,
+    );
+    gl.EnableVertexAttribArray(transform_attr + 3);
+    gl.VertexAttribPointer(
+      transform_attr + 3,
+      4,
+      gl::FLOAT,
+      gl::FALSE,
+      (std::mem::size_of::<MyVertex>()) as i32,
+      get_offset!(MyVertex, transform_mat4_4) as *const GLvoid,
+    );
     let color_attr = gl.GetAttribLocation(lyon_program, CString::new("Color").unwrap().into_raw());
     gl.EnableVertexAttribArray(color_attr as u32);
     gl.VertexAttribPointer(
       color_attr as u32,
-      3,
+      4,
       gl::FLOAT,
       gl::FALSE,
       (std::mem::size_of::<MyVertex>()) as i32,
       get_offset!(MyVertex, color_rgba) as *const GLvoid,
+    );
+
+    let pos_attr = gl.GetAttribLocation(lyon_program, CString::new("Position").unwrap().into_raw());
+    gl.EnableVertexAttribArray(pos_attr as u32);
+    gl.VertexAttribPointer(
+      pos_attr as u32,
+      2,
+      gl::FLOAT,
+      gl::FALSE,
+      (std::mem::size_of::<MyVertex>()) as i32,
+      get_offset!(MyVertex, position) as *const GLvoid,
     );
 
     (vao, vbo, ebo)
@@ -522,7 +565,7 @@ fn main() -> Result<(), String> {
   let camera_front = glam::Vec3::new(0.0, 0.0, -1.0);
   let camera_up = glam::Vec3::new(0.0, 1.0, 0.0);
   let camera_speed = 2.5;
-  let mut camera_zoom = 1.0;
+  let mut camera_zoom = 2.0;
   let mut last = 0.0;
   let (mut viewport_w, mut viewport_h) = (800, 600);
 
@@ -598,7 +641,7 @@ fn main() -> Result<(), String> {
         aspect * camera_zoom,
         -camera_zoom,
         camera_zoom,
-        0.1,
+        -100.0,
         100.0,
       );
 
@@ -628,10 +671,8 @@ fn main() -> Result<(), String> {
         );
       }
 
-      let mut a = 0;
-      //
       let mut geometry: VertexBuffers<MyVertex, u16> = VertexBuffers::new();
-      for i in -100..100 {
+      for i in -10..10 {
         for j in -10..10 {
           let i = i as f32;
           let j = j as f32;
@@ -639,9 +680,9 @@ fn main() -> Result<(), String> {
           let mut options = StrokeOptions::default();
           options.line_width = 0.1;
           let (w, h) = (1.0, 1.0);
-          let position = glam::Mat4::from_rotation_translation(
+          let transform = glam::Mat4::from_rotation_translation(
             glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 0.0, 1.0), seconds * 20.0f32.to_radians()),
-            glam::Vec3::new(2.0 + i, 2.0 + j, -1.0),
+            glam::Vec3::new(i, j, -1.0),
           ) * glam::Mat4::from_translation(glam::Vec3::new(w / -2.0, h / -2.0, 0.0));
           tessellator
             .tessellate_rectangle(
@@ -650,16 +691,16 @@ fn main() -> Result<(), String> {
               &mut BuffersBuilder::new(
                 &mut geometry,
                 MyVertexConfig {
+                  transform,
                   color_rgba: glam::Vec4::new(0.0, 1.0, 0.0, 1.0),
-                  position,
                 },
               ),
             )
             .unwrap();
           let (w, h) = (2.0, 2.0);
-          let position = glam::Mat4::from_rotation_translation(
+          let transform = glam::Mat4::from_rotation_translation(
             glam::Quat::from_axis_angle(glam::Vec3::new(0.0, 0.0, 1.0), seconds * 20.0f32.to_radians()),
-            glam::Vec3::new(2.0 + i, 2.0 + j, -40.0),
+            glam::Vec3::new(i, j, -40.0),
           ) * glam::Mat4::from_translation(glam::Vec3::new(w / -2.0, h / -2.0, 0.0));
           tessellator
             .tessellate_rectangle(
@@ -668,17 +709,14 @@ fn main() -> Result<(), String> {
               &mut BuffersBuilder::new(
                 &mut geometry,
                 MyVertexConfig {
+                  transform,
                   color_rgba: glam::Vec4::new(1.0, 0.0, 0.0, 1.0),
-                  position,
                 },
               ),
             )
             .unwrap();
-          a+=1;
         }
       }
-
-      println!("{}", a);
 
       gl.UseProgram(lyon_program);
       gl.BindVertexArray(lyon_vao);
