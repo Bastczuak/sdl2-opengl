@@ -565,7 +565,7 @@ fn main() -> Result<(), String> {
   let camera_front = glam::Vec3::new(0.0, 0.0, -1.0);
   let camera_up = glam::Vec3::new(0.0, 1.0, 0.0);
   let camera_speed = 2.5;
-  let mut camera_zoom = 2.0;
+  let mut camera_zoom = 1.0;
   let mut last = 0.0;
   let (mut viewport_w, mut viewport_h) = (800, 600);
 
@@ -635,15 +635,9 @@ fn main() -> Result<(), String> {
       gl.BindTexture(gl::TEXTURE_2D, cube_texture);
 
       let view = glam::Mat4::look_at_rh(camera_pos, camera_pos + camera_front, camera_up);
-      let aspect = 300.0 / 200.0;
-      let projection = glam::Mat4::orthographic_rh_gl(
-        -aspect * camera_zoom,
-        aspect * camera_zoom,
-        -camera_zoom,
-        camera_zoom,
-        -100.0,
-        100.0,
-      );
+      let projection =
+        glam::Mat4::orthographic_rh_gl(-300.0 * 0.5, 300.0 * 0.5, -200.0 * 0.5, 200.0 * 0.5, -100.0, 100.0)
+          * glam::Mat4::from_scale(glam::Vec3::new(camera_zoom, camera_zoom, 1.0));
 
       for (i, pos) in CUBE_POSITIONS.iter().enumerate() {
         let mvp_mat = {
