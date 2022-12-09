@@ -1014,7 +1014,6 @@ fn main() -> Result<(), String> {
         &mut text_vertices,
       );
 
-      gl.ActiveTexture(gl::TEXTURE0);
       gl.BindTexture(gl::TEXTURE_2D, atlas_texture);
       gl.BindVertexArray(text_vao);
       gl.BindBuffer(gl::ARRAY_BUFFER, text_vbo);
