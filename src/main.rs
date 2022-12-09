@@ -27,6 +27,11 @@ macro_rules! get_offset {
     field_ptr as usize - dummy_ptr as usize
   }};
 }
+macro_rules! cstr {
+    ($literal:expr) => {
+        (std::ffi::CStr::from_bytes_with_nul_unchecked(concat!($literal, "\0").as_bytes()).as_ptr())
+    }
+}
 
 pub struct Gl {
   inner: std::rc::Rc<gl::Gl>,
@@ -355,7 +360,7 @@ fn main() -> Result<(), String> {
       gl::DYNAMIC_DRAW,
     );
 
-    let transform_attr = gl.GetAttribLocation(lyon_program, CString::new("Transform").unwrap().into_raw()) as GLuint;
+    let transform_attr = gl.GetAttribLocation(lyon_program, cstr!("Transform")) as GLuint;
     gl.EnableVertexAttribArray(transform_attr);
     gl.VertexAttribPointer(
       transform_attr,
@@ -392,7 +397,7 @@ fn main() -> Result<(), String> {
       (std::mem::size_of::<MyVertex>()) as i32,
       get_offset!(MyVertex, transform_mat4_4) as *const GLvoid,
     );
-    let color_attr = gl.GetAttribLocation(lyon_program, CString::new("Color").unwrap().into_raw());
+    let color_attr = gl.GetAttribLocation(lyon_program, cstr!("Color"));
     gl.EnableVertexAttribArray(color_attr as u32);
     gl.VertexAttribPointer(
       color_attr as u32,
@@ -403,7 +408,7 @@ fn main() -> Result<(), String> {
       get_offset!(MyVertex, color_rgba) as *const GLvoid,
     );
 
-    let pos_attr = gl.GetAttribLocation(lyon_program, CString::new("Position").unwrap().into_raw());
+    let pos_attr = gl.GetAttribLocation(lyon_program, cstr!("Position"));
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
@@ -438,7 +443,7 @@ fn main() -> Result<(), String> {
       gl::STATIC_DRAW,
     );
 
-    let pos_attr = gl.GetAttribLocation(cube_program, CString::new("Position").unwrap().into_raw());
+    let pos_attr = gl.GetAttribLocation(cube_program, cstr!("Position"));
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
@@ -449,7 +454,7 @@ fn main() -> Result<(), String> {
       std::ptr::null(),
     );
 
-    let texture_coords_attr = gl.GetAttribLocation(cube_program, CString::new("TexCoords").unwrap().into_raw());
+    let texture_coords_attr = gl.GetAttribLocation(cube_program, cstr!("TexCoords"));
     gl.EnableVertexAttribArray(texture_coords_attr as u32);
     gl.VertexAttribPointer(
       texture_coords_attr as u32,
@@ -476,7 +481,7 @@ fn main() -> Result<(), String> {
       gl::STATIC_DRAW,
     );
 
-    let pos_attr = gl.GetAttribLocation(screen_program, CString::new("Position").unwrap().into_raw());
+    let pos_attr = gl.GetAttribLocation(screen_program, cstr!("Position"));
     gl.EnableVertexAttribArray(pos_attr as u32);
     gl.VertexAttribPointer(
       pos_attr as u32,
@@ -487,7 +492,7 @@ fn main() -> Result<(), String> {
       std::ptr::null(),
     );
 
-    let texture_coords_attr = gl.GetAttribLocation(screen_program, CString::new("TexCoords").unwrap().into_raw());
+    let texture_coords_attr = gl.GetAttribLocation(screen_program, cstr!("TexCoords"));
     gl.EnableVertexAttribArray(texture_coords_attr as u32);
     gl.VertexAttribPointer(
       texture_coords_attr as u32,
@@ -505,7 +510,7 @@ fn main() -> Result<(), String> {
     let cube_texture = load_texture(&gl, "container.jpeg")?;
     gl.UseProgram(cube_program);
     gl.Uniform1i(
-      gl.GetUniformLocation(cube_program, CString::new("uTexture").unwrap().into_raw()),
+      gl.GetUniformLocation(cube_program, cstr!("uTexture")),
       0,
     );
     cube_texture
@@ -514,7 +519,7 @@ fn main() -> Result<(), String> {
   let (frame_buffer, texture_color_buffer) = unsafe {
     gl.UseProgram(screen_program);
     gl.Uniform1i(
-      gl.GetUniformLocation(screen_program, CString::new("uTexture").unwrap().into_raw()),
+      gl.GetUniformLocation(screen_program, cstr!("uTexture")),
       0,
     );
 
@@ -651,7 +656,7 @@ fn main() -> Result<(), String> {
           projection * view * model
         };
         gl.UniformMatrix4fv(
-          gl.GetUniformLocation(cube_program, CString::new("uMVP").unwrap().into_raw()),
+          gl.GetUniformLocation(cube_program, cstr!("uMVP")),
           1,
           gl::FALSE,
           mvp_mat.to_cols_array().as_ptr(),
@@ -736,7 +741,7 @@ fn main() -> Result<(), String> {
       };
 
       gl.UniformMatrix4fv(
-        gl.GetUniformLocation(lyon_program, CString::new("uMVP").unwrap().into_raw()),
+        gl.GetUniformLocation(lyon_program, cstr!("uMVP")),
         1,
         gl::FALSE,
         mvp_mat.to_cols_array().as_ptr(),
