@@ -3,6 +3,7 @@ mod gl {
   include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
+use freetype as ft;
 use gl::types::*;
 use image::GenericImageView;
 use lyon::{
@@ -17,7 +18,7 @@ use sdl2::{
   keyboard::Keycode,
   video::GLProfile,
 };
-use std::{ffi::CString, ops::Deref};
+use std::{ffi::CString, ops::Deref, path::Path};
 
 macro_rules! get_offset {
   ($type:ty, $field:tt) => {{
@@ -28,9 +29,9 @@ macro_rules! get_offset {
   }};
 }
 macro_rules! cstr {
-    ($literal:expr) => {
-        (std::ffi::CStr::from_bytes_with_nul_unchecked(concat!($literal, "\0").as_bytes()).as_ptr())
-    }
+  ($literal:expr) => {
+    (std::ffi::CStr::from_bytes_with_nul_unchecked(concat!($literal, "\0").as_bytes()).as_ptr())
+  };
 }
 
 pub struct Gl {
@@ -173,6 +174,60 @@ void main() {
 }
 "#;
 
+const TEXT_VERTEX_SHADER: &str = r#"
+#version 330 core
+
+layout (location = 0) in vec4 PosTex;
+layout (location = 1) in vec4 Color;
+
+uniform mat4 uProjection;
+
+out VERTEX_SHADER_OUTPUT {
+  vec2 TexCoords;
+  vec4 Color;
+} OUT;
+
+void main() {
+  gl_Position = uProjection * vec4(PosTex.xy, 0.0, 1.0);
+  OUT.TexCoords = PosTex.zw;
+  OUT.Color = Color;
+}
+"#;
+const TEXT_FRAGMENT_SHADER: &str = r#"
+#version 330 core
+
+in VERTEX_SHADER_OUTPUT {
+  vec2 TexCoords;
+  vec4 Color;
+} IN;
+
+out vec4 Color;
+
+uniform sampler2D uTexture;
+
+void main() {
+  vec4 sampled = vec4(1.0, 1.0, 1.0, texture(uTexture, IN.TexCoords).r);
+  Color = IN.Color * sampled;
+}
+"#;
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct MyTextVertex {
+  pos_tex: [f32; 4],
+  color_rgba: [f32; 4],
+}
+
+struct Character {
+  tx: f32,
+  tx_1: f32,
+  ty: f32,
+  width: f32,
+  height: f32,
+  bearing: glam::Vec2,
+  advance: f32,
+}
+
 #[repr(C)]
 struct MyVertex {
   transform_mat4_1: [f32; 4],
@@ -314,6 +369,11 @@ fn main() -> Result<(), String> {
   debug_assert_eq!(gl_attr.context_profile(), GLProfile::Core);
   debug_assert_eq!(gl_attr.context_version(), (3, 3));
 
+  let path: &Path = Path::new("m5x7.ttf");
+  let library = ft::Library::init().unwrap();
+  let face = library.new_face(path, 0).unwrap();
+  face.set_pixel_sizes(0, 48).unwrap();
+
   let cube_program = {
     let vertex_shader = compile_shader(&gl, VERTEX_SHADER, gl::VERTEX_SHADER)?;
     let fragment_shader = compile_shader(&gl, FRAGMENT_SHADER, gl::FRAGMENT_SHADER)?;
@@ -327,6 +387,11 @@ fn main() -> Result<(), String> {
   let screen_program = {
     let vertex_shader = compile_shader(&gl, FBO_VERTEX_SHADER, gl::VERTEX_SHADER)?;
     let fragment_shader = compile_shader(&gl, FBO_FRAGMENT_SHADER, gl::FRAGMENT_SHADER)?;
+    link_program(&gl, vertex_shader, fragment_shader)?
+  };
+  let text_program = {
+    let vertex_shader = compile_shader(&gl, TEXT_VERTEX_SHADER, gl::VERTEX_SHADER)?;
+    let fragment_shader = compile_shader(&gl, TEXT_FRAGMENT_SHADER, gl::FRAGMENT_SHADER)?;
     link_program(&gl, vertex_shader, fragment_shader)?
   };
 
@@ -506,22 +571,55 @@ fn main() -> Result<(), String> {
     (vao, vbo)
   };
 
+  let (text_vao, text_vbo) = unsafe {
+    let (mut vao, mut vbo) = (0, 0);
+    gl.GenVertexArrays(1, &mut vao);
+    gl.GenBuffers(1, &mut vbo);
+    gl.BindVertexArray(vao);
+    gl.BindBuffer(gl::ARRAY_BUFFER, vbo);
+    gl.BufferData(
+      gl::ARRAY_BUFFER,
+      (6 * std::mem::size_of::<MyTextVertex>()) as GLsizeiptr,
+      std::ptr::null(),
+      gl::DYNAMIC_DRAW,
+    );
+
+    let pos_tex_attr = gl.GetAttribLocation(text_program, cstr!("PosTex"));
+    gl.EnableVertexAttribArray(pos_tex_attr as u32);
+    gl.VertexAttribPointer(
+      pos_tex_attr as u32,
+      4,
+      gl::FLOAT,
+      gl::FALSE,
+      (std::mem::size_of::<MyTextVertex>()) as i32,
+      get_offset!(MyTextVertex, pos_tex) as *const GLvoid,
+    );
+    let color_attr = gl.GetAttribLocation(text_program, cstr!("Color"));
+    gl.EnableVertexAttribArray(color_attr as u32);
+    gl.VertexAttribPointer(
+      color_attr as u32,
+      4,
+      gl::FLOAT,
+      gl::FALSE,
+      (std::mem::size_of::<MyTextVertex>()) as i32,
+      get_offset!(MyTextVertex, color_rgba) as *const GLvoid,
+    );
+    gl.BindBuffer(gl::ARRAY_BUFFER, 0);
+    gl.BindVertexArray(0);
+
+    (vao, vbo)
+  };
+
   let cube_texture = unsafe {
     let cube_texture = load_texture(&gl, "container.jpeg")?;
     gl.UseProgram(cube_program);
-    gl.Uniform1i(
-      gl.GetUniformLocation(cube_program, cstr!("uTexture")),
-      0,
-    );
+    gl.Uniform1i(gl.GetUniformLocation(cube_program, cstr!("uTexture")), 0);
     cube_texture
   };
 
   let (frame_buffer, texture_color_buffer) = unsafe {
     gl.UseProgram(screen_program);
-    gl.Uniform1i(
-      gl.GetUniformLocation(screen_program, cstr!("uTexture")),
-      0,
-    );
+    gl.Uniform1i(gl.GetUniformLocation(screen_program, cstr!("uTexture")), 0);
 
     let mut frame_buffer = 0;
     gl.GenFramebuffers(1, &mut frame_buffer);
@@ -564,6 +662,115 @@ fn main() -> Result<(), String> {
     (frame_buffer, texture_color_buffer)
   };
 
+  let (atlas_texture, characters) = unsafe {
+    let (mut w, mut h) = (0, 0);
+    for c in 32..127 {
+      if face.load_char(c, ft::face::LoadFlag::RENDER).is_ok() {
+        w += face.glyph().bitmap().width();
+        h = h.max(face.glyph().bitmap().rows());
+      } else {
+        eprintln!("could not load character {}", c as u8 as char);
+      }
+    }
+
+    let mut texture = 0;
+    gl.GenTextures(1, &mut texture);
+    gl.BindTexture(gl::TEXTURE_2D, texture);
+    gl.TexImage2D(
+      gl::TEXTURE_2D,
+      0,
+      gl::RED as i32,
+      w,
+      h,
+      0,
+      gl::RED,
+      gl::UNSIGNED_BYTE,
+      std::ptr::null(),
+    );
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+    gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+
+    let mut x = 0;
+    let mut characters = std::collections::HashMap::<char, Character>::new();
+    gl.PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+
+    for c in 32..127 {
+      if face.load_char(c, ft::face::LoadFlag::RENDER).is_ok() {
+        gl.TexSubImage2D(
+          gl::TEXTURE_2D,
+          0,
+          x,
+          0,
+          face.glyph().bitmap().width(),
+          face.glyph().bitmap().rows(),
+          gl::RED,
+          gl::UNSIGNED_BYTE,
+          face.glyph().bitmap().buffer().as_ptr() as *const GLvoid,
+        );
+
+        println!(
+          "{}, {}, {}, {}",
+          c as u8 as char,
+          x as f32 / w as f32,
+          (x as f32 + face.glyph().bitmap().width() as f32) / w as f32,
+          face.glyph().bitmap().rows() as f32 / h as f32
+        );
+
+        let character = Character {
+          tx: x as f32 / w as f32,
+          tx_1: (x as f32 + face.glyph().bitmap().width() as f32) / w as f32,
+          ty: face.glyph().bitmap().rows() as f32 / h as f32,
+          width: face.glyph().bitmap().width() as f32,
+          height: face.glyph().bitmap().rows() as f32,
+          bearing: glam::vec2(face.glyph().bitmap_left() as f32, face.glyph().bitmap_top() as f32),
+          advance: (face.glyph().advance().x >> 6) as f32,
+        };
+        characters.insert(c as u8 as char, character);
+
+        x += face.glyph().bitmap().width();
+      } else {
+        eprintln!("could not load character {}", c as u8 as char);
+      }
+    }
+
+    gl.BindTexture(gl::TEXTURE_2D, 0);
+
+    (texture, characters)
+  };
+
+  let build_text = |text: &str, mut x: f32, y: f32, scale: f32, color: glam::Vec3, buf: &mut Vec<MyTextVertex>| {
+    for c in text.chars() {
+      let color_rgba = glam::Vec4::from((color, 1.0)).to_array();
+      let ch = characters.get(&c).unwrap();
+      let x_pos = x + ch.bearing.x as f32 * scale;
+      let y_pos = y - (ch.height - ch.bearing.y) * scale;
+      let w = ch.width as f32 * scale;
+      let h = ch.height as f32 * scale;
+      let mut v = (0..6usize)
+        .map(|i| {
+          MyTextVertex {
+            pos_tex: match i {
+              0 => [x_pos, y_pos + h, ch.tx, 0.0],
+              1 => [x_pos, y_pos, ch.tx, ch.ty],
+              2 => [x_pos + w, y_pos, ch.tx_1, ch.ty],
+              //
+              3 => [x_pos, y_pos + h, ch.tx, 0.0],
+              4 => [x_pos + w, y_pos, ch.tx_1, ch.ty],
+              5 => [x_pos + w, y_pos + h, ch.tx_1, 0.0],
+              _ => panic!("that's too many vertices!"),
+            },
+            color_rgba,
+          }
+        })
+        .collect::<Vec<_>>();
+
+      buf.append(&mut v);
+      x += ch.advance * scale;
+    }
+  };
+
   let mut event_pump = sdl_context.event_pump().unwrap();
   let timer = sdl_context.timer().unwrap();
   let mut camera_pos = glam::Vec3::new(0.0, 0.0, 3.0);
@@ -573,6 +780,7 @@ fn main() -> Result<(), String> {
   let mut camera_zoom = 1.0;
   let mut last = 0.0;
   let (mut viewport_w, mut viewport_h) = (800, 600);
+  let mut text_vertices: Vec<MyTextVertex> = Vec::new();
 
   'running: loop {
     let seconds = timer.ticks() as f32 / 1000.0;
@@ -763,24 +971,92 @@ fn main() -> Result<(), String> {
       gl.ActiveTexture(gl::TEXTURE0);
       gl.BindTexture(gl::TEXTURE_2D, texture_color_buffer);
       gl.DrawArrays(gl::TRIANGLES, 0, 6);
+
+      //
+      gl.Enable(gl::BLEND);
+      gl.BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+
+      gl.UseProgram(text_program);
+
+      let projection = glam::Mat4::orthographic_rh_gl(0.0, viewport_w as f32, 0.0, viewport_h as f32, -10.0, 10.0);
+      gl.UniformMatrix4fv(
+        gl.GetUniformLocation(text_program, cstr!("uProjection")),
+        1,
+        gl::FALSE,
+        projection.to_cols_array().as_ptr(),
+      );
+
+      let s = (32..64u8).map(|c| c as char).collect::<String>();
+      build_text(
+        &s,
+        0.0,
+        viewport_h as f32 / 2.0 + 50.0,
+        1.0,
+        glam::vec3(0.0, 1.0, 0.0),
+        &mut text_vertices,
+      );
+      let s = (64..96u8).map(|c| c as char).collect::<String>();
+      build_text(
+        &s,
+        0.0,
+        viewport_h as f32 / 2.0,
+        1.0,
+        glam::vec3(1.0, 0.0, 0.0),
+        &mut text_vertices,
+      );
+      let s = (96..127u8).map(|c| c as char).collect::<String>();
+      build_text(
+        &s,
+        0.0,
+        viewport_h as f32 / 2.0 - 50.0,
+        1.0,
+        glam::vec3(1.0, 1.0, 0.0),
+        &mut text_vertices,
+      );
+
+      gl.ActiveTexture(gl::TEXTURE0);
+      gl.BindTexture(gl::TEXTURE_2D, atlas_texture);
+      gl.BindVertexArray(text_vao);
+      gl.BindBuffer(gl::ARRAY_BUFFER, text_vbo);
+      gl.BufferData(
+        gl::ARRAY_BUFFER,
+        (text_vertices.len() * std::mem::size_of::<MyTextVertex>()) as GLsizeiptr,
+        text_vertices.as_ptr() as *const GLvoid,
+        gl::DYNAMIC_DRAW,
+      );
+      gl.BindBuffer(gl::ARRAY_BUFFER, 0);
+      gl.DrawArrays(gl::TRIANGLES, 0, text_vertices.len() as i32);
+
+      gl.BindVertexArray(0);
+      gl.BindTexture(gl::TEXTURE_2D, 0);
+      gl.Disable(gl::BLEND);
+      text_vertices.clear();
     }
 
     window.gl_swap_window();
   }
 
   unsafe {
-    gl.DeleteVertexArrays(1, &cube_vao);
     gl.DeleteVertexArrays(1, &screen_vao);
-    gl.DeleteVertexArrays(1, &lyon_vao);
+    gl.DeleteBuffers(1, &screen_vbo);
+    gl.DeleteProgram(screen_program);
+
+    gl.DeleteVertexArrays(1, &cube_vao);
     gl.DeleteBuffers(1, &cube_vbo);
     gl.DeleteBuffers(1, &cube_ebo);
+    gl.DeleteBuffers(1, &cube_texture);
+    gl.DeleteProgram(cube_program);
+
+    gl.DeleteVertexArrays(1, &lyon_vao);
     gl.DeleteBuffers(1, &lyon_vbo);
     gl.DeleteBuffers(1, &lyon_ebo);
-    gl.DeleteBuffers(1, &cube_texture);
-    gl.DeleteBuffers(1, &screen_vbo);
-    gl.DeleteProgram(cube_program);
-    gl.DeleteProgram(screen_program);
     gl.DeleteProgram(lyon_program);
+
+    gl.DeleteVertexArrays(1, &text_vao);
+    gl.DeleteBuffers(1, &text_vbo);
+    gl.DeleteBuffers(1, &atlas_texture);
+    gl.DeleteProgram(text_program);
+
     gl.DeleteFramebuffers(1, &frame_buffer);
   }
 
