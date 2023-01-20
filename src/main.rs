@@ -571,15 +571,24 @@ fn main() -> Result<(), String> {
     (vao, vbo)
   };
 
-  let (text_vao, text_vbo) = unsafe {
-    let (mut vao, mut vbo) = (0, 0);
+  let (text_vao, text_vbo, text_ebo) = unsafe {
+    let (mut vao, mut vbo, mut ebo) = (0, 0, 0);
     gl.GenVertexArrays(1, &mut vao);
     gl.GenBuffers(1, &mut vbo);
     gl.BindVertexArray(vao);
     gl.BindBuffer(gl::ARRAY_BUFFER, vbo);
     gl.BufferData(
       gl::ARRAY_BUFFER,
-      (6 * std::mem::size_of::<MyTextVertex>()) as GLsizeiptr,
+      (4 * std::mem::size_of::<MyTextVertex>() * 1000) as GLsizeiptr,
+      std::ptr::null(),
+      gl::DYNAMIC_DRAW,
+    );
+
+    gl.GenBuffers(1, &mut ebo);
+    gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+    gl.BufferData(
+      gl::ELEMENT_ARRAY_BUFFER,
+      (6 * std::mem::size_of::<u16>() * 1000) as GLsizeiptr,
       std::ptr::null(),
       gl::DYNAMIC_DRAW,
     );
@@ -607,7 +616,7 @@ fn main() -> Result<(), String> {
     gl.BindBuffer(gl::ARRAY_BUFFER, 0);
     gl.BindVertexArray(0);
 
-    (vao, vbo)
+    (vao, vbo, ebo)
   };
 
   let cube_texture = unsafe {
@@ -740,7 +749,8 @@ fn main() -> Result<(), String> {
     (texture, characters)
   };
 
-  let build_text = |text: &str, mut x: f32, y: f32, scale: f32, color: glam::Vec3, buf: &mut Vec<MyTextVertex>| {
+  let build_text = |text: &str, mut x: f32, y: f32, scale: f32, color: glam::Vec3, buf: &mut Vec<MyTextVertex>, ind: &mut Vec<u16>| {
+    let mut offset = buf.len() as u16;
     for c in text.chars() {
       let color_rgba = glam::Vec4::from((color, 1.0)).to_array();
       let ch = characters.get(&c).unwrap();
@@ -748,17 +758,14 @@ fn main() -> Result<(), String> {
       let y_pos = y - (ch.height - ch.bearing.y) * scale;
       let w = ch.width as f32 * scale;
       let h = ch.height as f32 * scale;
-      let mut v = (0..6usize)
+      let mut v = (0..4usize)
         .map(|i| {
           MyTextVertex {
             pos_tex: match i {
-              0 => [x_pos, y_pos + h, ch.tx, 0.0],
-              1 => [x_pos, y_pos, ch.tx, ch.ty],
-              2 => [x_pos + w, y_pos, ch.tx_1, ch.ty],
-              //
-              3 => [x_pos, y_pos + h, ch.tx, 0.0],
-              4 => [x_pos + w, y_pos, ch.tx_1, ch.ty],
-              5 => [x_pos + w, y_pos + h, ch.tx_1, 0.0],
+              0 => [x_pos + w, y_pos + h, ch.tx_1, 0.0], // top right
+              1 => [x_pos + w, y_pos, ch.tx_1, ch.ty], // bottom right
+              2 => [x_pos, y_pos, ch.tx, ch.ty], // bottom left
+              3 => [x_pos, y_pos + h, ch.tx, 0.0], // top left
               _ => panic!("that's too many vertices!"),
             },
             color_rgba,
@@ -766,8 +773,20 @@ fn main() -> Result<(), String> {
         })
         .collect::<Vec<_>>();
 
+      let mut indices = vec![
+        0u16 + offset, // top right
+        1 + offset, // bottom right
+        3 + offset, // top left
+        //
+        1 + offset, // bottom right
+        2 + offset, // bottom left
+        3 + offset, // top left
+      ];
+
       buf.append(&mut v);
+      ind.append(&mut indices);
       x += ch.advance * scale;
+      offset += 4;
     }
   };
 
@@ -781,6 +800,7 @@ fn main() -> Result<(), String> {
   let mut last = 0.0;
   let (mut viewport_w, mut viewport_h) = (800, 600);
   let mut text_vertices: Vec<MyTextVertex> = Vec::new();
+  let mut text_indices: Vec<u16> = Vec::new();
 
   'running: loop {
     let seconds = timer.ticks() as f32 / 1000.0;
@@ -994,6 +1014,7 @@ fn main() -> Result<(), String> {
         1.0,
         glam::vec3(0.0, 1.0, 0.0),
         &mut text_vertices,
+        &mut text_indices
       );
       let s = (64..96u8).map(|c| c as char).collect::<String>();
       build_text(
@@ -1003,6 +1024,7 @@ fn main() -> Result<(), String> {
         1.0,
         glam::vec3(1.0, 0.0, 0.0),
         &mut text_vertices,
+        &mut text_indices
       );
       let s = (96..127u8).map(|c| c as char).collect::<String>();
       build_text(
@@ -1012,24 +1034,41 @@ fn main() -> Result<(), String> {
         1.0,
         glam::vec3(1.0, 1.0, 0.0),
         &mut text_vertices,
+        &mut text_indices
       );
+
+      println!("{:?}", text_indices);
 
       gl.BindTexture(gl::TEXTURE_2D, atlas_texture);
       gl.BindVertexArray(text_vao);
+
       gl.BindBuffer(gl::ARRAY_BUFFER, text_vbo);
-      gl.BufferData(
+      gl.BufferSubData(
         gl::ARRAY_BUFFER,
+        0,
         (text_vertices.len() * std::mem::size_of::<MyTextVertex>()) as GLsizeiptr,
         text_vertices.as_ptr() as *const GLvoid,
+      );
+      gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, text_ebo);
+      gl.BufferData(
+        gl::ELEMENT_ARRAY_BUFFER,
+        (text_indices.len() * std::mem::size_of::<u16>()) as GLsizeiptr,
+        text_indices.as_ptr() as *const GLvoid,
         gl::DYNAMIC_DRAW,
       );
-      gl.BindBuffer(gl::ARRAY_BUFFER, 0);
-      gl.DrawArrays(gl::TRIANGLES, 0, text_vertices.len() as i32);
+
+      gl.DrawElements(
+        gl::TRIANGLES,
+        text_indices.len() as i32,
+        gl::UNSIGNED_SHORT,
+        std::ptr::null(),
+      );
 
       gl.BindVertexArray(0);
       gl.BindTexture(gl::TEXTURE_2D, 0);
       gl.Disable(gl::BLEND);
       text_vertices.clear();
+      text_indices.clear();
     }
 
     window.gl_swap_window();
